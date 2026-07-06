@@ -1,0 +1,6 @@
+captured_traffic/
+mitmproxy_captured/
+certs/
+*.log
+__pycache__/
+*.pyc
