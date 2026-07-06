@@ -9,11 +9,17 @@ Binary info:
   - Server: https://zygame.gaqh8.fun/login.php
 
 Patches applied:
+  -- curl layer --
   1. CURLOPT_SSL_VERIFYPEER = 1 -> 0  (disable SSL certificate verification)
   2. CURLOPT_SSL_VERIFYHOST = 2 -> 0  (disable hostname verification)
   3. Dynamic VERIFYHOST calculation -> force 0
   4. Dynamic VERIFYPEER calculation -> force 0
-  5. OpenSSL SSL_CTX_set_verify mode -> force SSL_VERIFY_NONE (0)
+  -- OpenSSL layer --
+  5. SSL_CTX_set_verify mode -> force SSL_VERIFY_NONE (0)
+  6. SSL ctx callback error check -> unconditional skip
+  7-8. SSL verify callback -> always return 1 (success)
+  9-10. ssl_verify_cert_chain -> always return 1 (success)
+  11-12. ssl_verify_peer_cert -> always return 1 (success)
 
 Usage:
   python3 patch_ssl_bypass.py libZyGames.so
@@ -58,6 +64,48 @@ PATCHES = [
         "original": 0x1a890174,  # csel w20, w11, w9, eq
         "patched":  0x2a1f03f4,  # mov w20, wzr  (SSL_VERIFY_NONE = 0)
         "description": "OpenSSL SSL_CTX_set_verify mode -> SSL_VERIFY_NONE",
+    },
+    {
+        "offset": 0xbe3f90,
+        "original": 0x340000d4,  # cbz w20, +0x18
+        "patched":  0x14000006,  # b +0x18  (unconditional skip)
+        "description": "SSL ctx callback error check -> always skip error path",
+    },
+    {
+        "offset": 0xbe94f0,
+        "original": 0xd10103ff,  # sub sp, sp, #0x40
+        "patched":  0x52800020,  # mov w0, #1
+        "description": "SSL verify callback -> return 1 (success) [1/2]",
+    },
+    {
+        "offset": 0xbe94f4,
+        "original": 0xf942dc08,  # ldr x8, [x0, #0x5b8]
+        "patched":  0xd65f03c0,  # ret
+        "description": "SSL verify callback -> return 1 (success) [2/2]",
+    },
+    {
+        "offset": 0xbc92dc,
+        "original": 0xd101c3ff,  # sub sp, sp, #0x70
+        "patched":  0x52800020,  # mov w0, #1
+        "description": "ssl_verify_cert_chain -> return 1 (success) [1/2]",
+    },
+    {
+        "offset": 0xbc92e0,
+        "original": 0xf9400008,  # ldr x8, [x0]
+        "patched":  0xd65f03c0,  # ret
+        "description": "ssl_verify_cert_chain -> return 1 (success) [2/2]",
+    },
+    {
+        "offset": 0xbc96b8,
+        "original": 0xd101c3ff,  # sub sp, sp, #0x70
+        "patched":  0x52800020,  # mov w0, #1
+        "description": "ssl_verify_peer_cert -> return 1 (success) [1/2]",
+    },
+    {
+        "offset": 0xbc96bc,
+        "original": 0xa9026ffc,  # stp x28, x27, [sp, #0x20]
+        "patched":  0xd65f03c0,  # ret
+        "description": "ssl_verify_peer_cert -> return 1 (success) [2/2]",
     },
 ]
 
