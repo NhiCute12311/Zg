@@ -285,35 +285,35 @@ def load_accounts_file(filepath):
 def input_accounts_interactive():
     """Nhap tai khoan tuong tac."""
     accounts = []
-    print("\n" + bold("NHAP TAI KHOAN"))
-    print(dim("  Nhap tai khoan Garena. Go 'done' khi xong."))
 
     idx = 1
     while True:
-        print("\n  {}--- Tai khoan #{} ---{}".format(C.CYAN, idx, C.RESET))
-        acc = cinput("  Ten dang nhap (hoac 'done'): ")
-        if acc.lower() in ("done", "d", "xong", ""):
+        if idx == 1:
+            print("")
+        print("  {}--- Tai khoan #{} ---{}".format(C.CYAN, idx, C.RESET))
+        acc = cinput("  Tai khoan Garena: ")
+        if not acc:
             if accounts:
                 break
-            print(warn("Can it nhat 1 tai khoan!"))
+            print(warn("Nhap tai khoan!"))
             continue
 
-        pw = cinput("  Mat khau: ")
+        pw = getpass.getpass("  Mat khau: ")
         if not pw:
             print(warn("Mat khau khong duoc de trong!"))
             continue
 
-        label = cinput("  Nhan (ENTER = dung ten TK): ")
-        if not label:
-            label = acc
-
         accounts.append({
             "account": acc,
             "password": pw,
-            "label": label,
+            "label": acc,
         })
-        print(ok("  Da them: {}".format(label)))
+        print(ok("  OK: {}".format(acc)))
         idx += 1
+
+        more = cinput("\n  Them tai khoan nua? (y/N): ")
+        if more.lower() not in ("y", "yes", "co", "c"):
+            break
 
     return accounts
 
