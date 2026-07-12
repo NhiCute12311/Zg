@@ -98,29 +98,59 @@ def garena_login(account, password, session=None):
 
     if "url" in pre and "v1" not in pre:
         geo_raw = pre["url"]
+        import sys as _sys
+        print("[debug] geo redirect url: {}".format(geo_raw), file=_sys.stderr)
+
         from urllib.parse import urlparse
         parsed = urlparse(geo_raw)
         geo_base = "{}://{}".format(parsed.scheme, parsed.netloc)
-        geo_path = parsed.path.rstrip("/")
 
-        if "/api/prelogin" in geo_path:
-            prelogin_url = geo_raw
-        else:
-            prelogin_url = geo_base + "/api/prelogin"
+        # Try multiple URL strategies
+        candidates = []
+        if parsed.path and parsed.path != "/":
+            candidates.append(geo_raw)
+        candidates.append(geo_base + "/api/prelogin")
+        geo_base_with_appid = geo_raw.rstrip("/")
+        if not geo_base_with_appid.endswith("/api/prelogin"):
+            candidates.append(geo_base_with_appid + "/api/prelogin")
 
-        ts = str(int(time.time() * 1000))
-        prelogin_params["id"] = ts
-        resp = s.get(
-            prelogin_url,
-            params=prelogin_params,
-            headers={"User-Agent": WEB_USER_AGENT},
-            timeout=15,
-        )
-        pre = _safe_json(resp)
-        base_url = geo_base
+        pre = None
+        for try_url in candidates:
+            ts = str(int(time.time() * 1000))
+            prelogin_params["id"] = ts
+            print("[debug] trying: {}".format(try_url), file=_sys.stderr)
+            try:
+                resp = s.get(
+                    try_url,
+                    params=prelogin_params,
+                    headers={"User-Agent": WEB_USER_AGENT},
+                    timeout=15,
+                )
+                if resp.status_code != 200:
+                    print("[debug] HTTP {}".format(resp.status_code), file=_sys.stderr)
+                    continue
+                pre = resp.json()
+                if "v1" in pre and "v2" in pre:
+                    # Figure out the base for subsequent calls
+                    base_url = geo_base
+                    if try_url == geo_raw and parsed.path:
+                        path_no_api = parsed.path
+                        for suffix in ["/api/prelogin", "/prelogin"]:
+                            if path_no_api.endswith(suffix):
+                                path_no_api = path_no_api[:-len(suffix)]
+                                break
+                        base_url = geo_base + path_no_api.rstrip("/")
+                    print("[debug] base_url: {}".format(base_url), file=_sys.stderr)
+                    break
+                print("[debug] no v1/v2: {}".format(
+                    json.dumps(pre)[:150]), file=_sys.stderr)
+            except Exception as ex:
+                print("[debug] error: {}".format(ex), file=_sys.stderr)
+                continue
 
-    if "v1" not in pre or "v2" not in pre:
-        raise Exception("prelogin failed: {}".format(json.dumps(pre)[:200]))
+    if not pre or "v1" not in pre or "v2" not in pre:
+        raise Exception("prelogin failed: {}".format(
+            json.dumps(pre)[:200] if pre else "all geo URLs returned errors"))
 
     v1 = pre["v1"]
     v2 = pre["v2"]
