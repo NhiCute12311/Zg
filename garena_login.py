@@ -6,12 +6,15 @@ Automates the Garena authentication flow:
   2. login     → AES-ECB encrypted password → session_key
   3. OAuth grant → authorization code
   4. OAuth exchange → access_token, open_id, uid
+
+Uses curl subprocess to avoid DataDome TLS fingerprint detection.
 """
 
 import hashlib
 import json
+import subprocess
 import time
-import struct
+from urllib.parse import urlencode
 
 try:
     from Crypto.Cipher import AES
@@ -37,6 +40,71 @@ WEB_USER_AGENT = (
     "Mobile Safari/537.36"
 )
 SDK_USER_AGENT = "GarenaMSDK/4.0.38(SM-A165F ;Android 15;vi;VN;)"
+
+_COOKIE_JAR = None
+
+
+def _curl_get(url, params=None, headers=None, timeout=15):
+    global _COOKIE_JAR
+    if _COOKIE_JAR is None:
+        import tempfile
+        _COOKIE_JAR = tempfile.mktemp(suffix=".txt")
+
+    if params:
+        url = url + "?" + urlencode(params)
+
+    cmd = [
+        "curl", "-s", "-L",
+        "--max-time", str(timeout),
+        "-b", _COOKIE_JAR,
+        "-c", _COOKIE_JAR,
+    ]
+    if headers:
+        for k, v in headers.items():
+            cmd.extend(["-H", "{}: {}".format(k, v)])
+    cmd.append(url)
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+    body = result.stdout
+    if not body.strip():
+        raise Exception("curl: empty response for {}".format(url[:80]))
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        raise Exception("curl: non-JSON response: {}".format(body[:300]))
+
+
+def _curl_post(url, data=None, headers=None, timeout=15):
+    global _COOKIE_JAR
+    if _COOKIE_JAR is None:
+        import tempfile
+        _COOKIE_JAR = tempfile.mktemp(suffix=".txt")
+
+    cmd = [
+        "curl", "-s", "-L",
+        "--max-time", str(timeout),
+        "-b", _COOKIE_JAR,
+        "-c", _COOKIE_JAR,
+        "-X", "POST",
+    ]
+    if headers:
+        for k, v in headers.items():
+            cmd.extend(["-H", "{}: {}".format(k, v)])
+    if data:
+        if isinstance(data, dict):
+            cmd.extend(["-d", urlencode(data)])
+        else:
+            cmd.extend(["-d", str(data)])
+    cmd.append(url)
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout + 10)
+    body = result.stdout
+    if not body.strip():
+        raise Exception("curl: empty response for {}".format(url[:80]))
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError:
+        raise Exception("curl: non-JSON response: {}".format(body[:300]))
 
 
 def _aes_ecb_encrypt_no_padding(plaintext_bytes, key_bytes):
@@ -67,90 +135,23 @@ def garena_login(account, password, session=None):
         uid, open_id, access_token, session_key, refresh_token, expiry_time
     or raises Exception on failure.
     """
-    if requests is None:
-        raise ImportError("pip install requests")
-
-    s = session or requests.Session()
+    hdrs = {"User-Agent": WEB_USER_AGENT}
     ts = str(int(time.time() * 1000))
 
-    def _safe_json(r):
-        try:
-            return r.json()
-        except Exception:
-            raise Exception("API error (HTTP {}): {}".format(
-                r.status_code, r.text[:300]))
-
-    # Step 1: prelogin (follow geo-redirect if needed)
-    base_url = GARENA_CONNECT_BASE
-    prelogin_params = {
-        "app_id": APP_ID,
-        "account": account,
-        "format": "json",
-        "id": ts,
-    }
-    resp = s.get(
-        base_url + "/api/prelogin",
-        params=prelogin_params,
-        headers={"User-Agent": WEB_USER_AGENT},
-        timeout=15,
+    # Step 1: prelogin
+    pre = _curl_get(
+        GARENA_CONNECT_BASE + "/api/prelogin",
+        params={
+            "app_id": APP_ID,
+            "account": account,
+            "format": "json",
+            "id": ts,
+        },
+        headers=hdrs,
     )
-    pre = _safe_json(resp)
 
-    if "url" in pre and "v1" not in pre:
-        geo_raw = pre["url"]
-        import sys as _sys
-        print("[debug] geo redirect url: {}".format(geo_raw), file=_sys.stderr)
-
-        from urllib.parse import urlparse
-        parsed = urlparse(geo_raw)
-        geo_base = "{}://{}".format(parsed.scheme, parsed.netloc)
-
-        # Try multiple URL strategies
-        candidates = []
-        if parsed.path and parsed.path != "/":
-            candidates.append(geo_raw)
-        candidates.append(geo_base + "/api/prelogin")
-        geo_base_with_appid = geo_raw.rstrip("/")
-        if not geo_base_with_appid.endswith("/api/prelogin"):
-            candidates.append(geo_base_with_appid + "/api/prelogin")
-
-        pre = None
-        for try_url in candidates:
-            ts = str(int(time.time() * 1000))
-            prelogin_params["id"] = ts
-            print("[debug] trying: {}".format(try_url), file=_sys.stderr)
-            try:
-                resp = s.get(
-                    try_url,
-                    params=prelogin_params,
-                    headers={"User-Agent": WEB_USER_AGENT},
-                    timeout=15,
-                )
-                if resp.status_code != 200:
-                    print("[debug] HTTP {}".format(resp.status_code), file=_sys.stderr)
-                    continue
-                pre = resp.json()
-                if "v1" in pre and "v2" in pre:
-                    # Figure out the base for subsequent calls
-                    base_url = geo_base
-                    if try_url == geo_raw and parsed.path:
-                        path_no_api = parsed.path
-                        for suffix in ["/api/prelogin", "/prelogin"]:
-                            if path_no_api.endswith(suffix):
-                                path_no_api = path_no_api[:-len(suffix)]
-                                break
-                        base_url = geo_base + path_no_api.rstrip("/")
-                    print("[debug] base_url: {}".format(base_url), file=_sys.stderr)
-                    break
-                print("[debug] no v1/v2: {}".format(
-                    json.dumps(pre)[:150]), file=_sys.stderr)
-            except Exception as ex:
-                print("[debug] error: {}".format(ex), file=_sys.stderr)
-                continue
-
-    if not pre or "v1" not in pre or "v2" not in pre:
-        raise Exception("prelogin failed: {}".format(
-            json.dumps(pre)[:200] if pre else "all geo URLs returned errors"))
+    if "v1" not in pre or "v2" not in pre:
+        raise Exception("prelogin failed: {}".format(json.dumps(pre)[:200]))
 
     v1 = pre["v1"]
     v2 = pre["v2"]
@@ -158,8 +159,8 @@ def garena_login(account, password, session=None):
     # Step 2: login with encrypted password
     ts2 = str(int(time.time() * 1000))
     encrypted_pw = hash_password(password, v1, v2)
-    resp2 = s.get(
-        base_url + "/api/login",
+    login_data = _curl_get(
+        GARENA_CONNECT_BASE + "/api/login",
         params={
             "app_id": APP_ID,
             "account": account,
@@ -168,10 +169,9 @@ def garena_login(account, password, session=None):
             "format": "json",
             "id": ts2,
         },
-        headers={"User-Agent": WEB_USER_AGENT},
-        timeout=15,
+        headers=hdrs,
     )
-    login_data = resp2.json()
+
     if "error" in login_data:
         raise Exception("login failed: {}".format(login_data["error"]))
     if "session_key" not in login_data:
@@ -183,8 +183,8 @@ def garena_login(account, password, session=None):
 
     # Step 3: OAuth token/grant
     ts3 = str(int(time.time() * 1000))
-    resp3 = s.post(
-        base_url + "/oauth/token/grant",
+    grant_data = _curl_post(
+        GARENA_CONNECT_BASE + "/oauth/token/grant",
         data={
             "client_id": APP_ID,
             "response_type": "code",
@@ -197,9 +197,8 @@ def garena_login(account, password, session=None):
             "User-Agent": WEB_USER_AGENT,
             "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         },
-        timeout=15,
     )
-    grant_data = resp3.json()
+
     if "code" not in grant_data:
         raise Exception("token/grant failed: {}".format(
             json.dumps(grant_data)[:200]))
@@ -209,8 +208,8 @@ def garena_login(account, password, session=None):
     platform_uid = grant_data.get("uid")
 
     # Step 4: OAuth token/exchange
-    resp4 = s.post(
-        base_url + "/oauth/token/exchange",
+    exchange_data = _curl_post(
+        GARENA_CONNECT_BASE + "/oauth/token/exchange",
         data={
             "code": oauth_code,
             "grant_type": "authorization_code",
@@ -224,9 +223,8 @@ def garena_login(account, password, session=None):
             "User-Agent": SDK_USER_AGENT,
             "Content-Type": "application/x-www-form-urlencoded",
         },
-        timeout=15,
     )
-    exchange_data = resp4.json()
+
     if "access_token" not in exchange_data:
         raise Exception("token/exchange failed: {}".format(
             json.dumps(exchange_data)[:200]))
@@ -245,12 +243,7 @@ def garena_login(account, password, session=None):
 
 
 def build_itopencodeparam(open_id, access_token):
-    """Build msdk-itopencodeparam from Garena credentials.
-
-    The itopencodeparam is a hex-encoded structure containing the
-    openid and token for MSDK authentication. For Garena channel (10),
-    the format is the Garena open_id + access_token encoded.
-    """
+    """Build msdk-itopencodeparam from Garena credentials."""
     token_str = "{}|{}".format(open_id, access_token)
     token_bytes = token_str.encode("utf-8")
     pad_len = 16 - (len(token_bytes) % 16)
@@ -264,62 +257,46 @@ def build_itopencodeparam(open_id, access_token):
 
 
 def build_itopencodeparam_raw(open_id, access_token):
-    """Build msdk-itopencodeparam using raw hex concatenation.
-
-    Alternative encoding: hex(openid_bytes + token_bytes).
-    """
+    """Build msdk-itopencodeparam using raw hex concatenation."""
     combined = open_id.encode("utf-8") + b"|" + access_token.encode("utf-8")
     return combined.hex().upper()
 
 
 def try_itop_login(open_id, access_token, uid, session=None):
-    """Try to authenticate with iTop to get MSDK credentials.
-
-    Attempts known iTop REST API endpoints for Garena games.
-    Returns the itopencodeparam string or None.
-    """
-    if requests is None:
-        return None
-
-    s = session or requests.Session()
-
+    """Try to authenticate with iTop to get MSDK credentials."""
     endpoints = [
         "https://itop.kg.garena.vn/auth/login_garena",
         "https://itop.kg.garena.vn/v2/auth/login_garena",
         "https://itop.kg.garena.vn/auth/login",
     ]
 
+    post_data = {
+        "gameid": "1137",
+        "channelid": "10",
+        "openid": open_id,
+        "token": access_token,
+        "uid": str(uid),
+        "os": "1",
+        "lang": "vi",
+        "area": "VN",
+    }
+    post_hdrs = {
+        "User-Agent": SDK_USER_AGENT,
+        "Content-Type": "application/x-www-form-urlencoded",
+    }
+
     for endpoint in endpoints:
         try:
-            resp = s.post(
-                endpoint,
-                data={
-                    "gameid": "1137",
-                    "channelid": "10",
-                    "openid": open_id,
-                    "token": access_token,
-                    "uid": str(uid),
-                    "os": "1",
-                    "lang": "vi",
-                    "area": "VN",
-                },
-                headers={
-                    "User-Agent": SDK_USER_AGENT,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-                timeout=15,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                if data.get("ret") == 0:
-                    itop_openid = data.get("openid", "")
-                    itop_token = data.get("token", "")
-                    if itop_openid and itop_token:
-                        combined = itop_openid + itop_token
-                        return combined.upper()
-                    encodeparam = data.get("itopencodeparam", "")
-                    if encodeparam:
-                        return encodeparam
+            data = _curl_post(endpoint, data=post_data, headers=post_hdrs)
+            if data.get("ret") == 0:
+                itop_openid = data.get("openid", "")
+                itop_token = data.get("token", "")
+                if itop_openid and itop_token:
+                    combined = itop_openid + itop_token
+                    return combined.upper()
+                encodeparam = data.get("itopencodeparam", "")
+                if encodeparam:
+                    return encodeparam
         except Exception:
             continue
 
@@ -327,11 +304,7 @@ def try_itop_login(open_id, access_token, uid, session=None):
 
 
 def get_msdk_auth_token(account, password):
-    """Full automated flow: login → get itopencodeparam.
-
-    Returns dict with:
-        itopencodeparam, open_id, access_token, uid, session_key
-    """
+    """Full automated flow: login → get itopencodeparam."""
     login_result = garena_login(account, password)
 
     open_id = login_result["open_id"]
