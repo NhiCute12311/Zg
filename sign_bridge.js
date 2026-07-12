@@ -227,6 +227,30 @@ if (args.includes('--test')) {
       return;
     }
     
+    if (req.url === '/rsaencrypt' && req.method === 'POST') {
+      let body = '';
+      req.on('data', c => body += c);
+      req.on('end', async () => {
+        try {
+          const tcsj = await initTCSJ();
+          const data = JSON.parse(body || '{}');
+          const plaintext = data.plaintext || '';
+          if (!plaintext) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'Missing plaintext' }));
+            return;
+          }
+          const b64 = tcsj.rsaEncrypt(plaintext);
+          const hex = Buffer.from(b64, 'base64').toString('hex').toUpperCase();
+          res.end(JSON.stringify({ base64: b64, hex: hex }));
+        } catch (e) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
     if (req.url === '/sign' && req.method === 'POST') {
       let body = '';
       req.on('data', c => body += c);

@@ -126,12 +126,12 @@ def auto_login_account(account, password):
 
     # Thu lay token tu iTop
     tprint(info("  Lay MSDK token..."))
-    itop_token = try_itop_login(open_id, access_token, uid, debug=True)
+    itop_token = try_itop_login(open_id, access_token, uid)
     if itop_token:
         tprint(ok("  iTop auth OK! token={}...".format(itop_token[:30])))
     else:
         itop_token = build_itopencodeparam(open_id, access_token)
-        tprint(info("  Dung AES token: {}...".format(itop_token[:30])))
+        tprint(info("  RSA token: {}...".format(itop_token[:30])))
 
     return {
         "auth_token": itop_token,
@@ -382,18 +382,18 @@ def run_auto(accounts, image_dir, rounds_arg, dry_run=False, har_path=None):
         sys.exit(1)
     print(ok("Mang OK"))
 
-    # Init DataDome
-    print("\n" + info("Khoi tao DataDome bypass..."))
-    init_datadome(har_path)
-
     # Set API base
     loadtran.API_BASE = "https://kgvn-api.mobagarena.com"
 
-    # Khoi dong sign bridge
+    # Khoi dong sign bridge (can truoc login de tao itopencodeparam)
     bridge_ok = start_sign_bridge()
     if not bridge_ok:
         print(warn("Sign bridge KHONG HOAT DONG."))
-        print(info("Se chay khong co sign (co the bi -5001)."))
+        print(info("Se chay khong co sign."))
+
+    # Init DataDome
+    print("\n" + info("Khoi tao DataDome bypass..."))
+    init_datadome(har_path)
 
     # Hien thi danh sach accounts
     n_acc = len(accounts)

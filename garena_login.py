@@ -410,6 +410,25 @@ def garena_login(account, password, dd_cookie="", template_cookies=None,
 # ─── MSDK TOKEN ──────────────────────────────────────────────────────────────
 
 def build_itopencodeparam(open_id, access_token):
+    """Generate itopencodeparam via sign bridge rsaEncrypt."""
+    plaintext = "{}|{}".format(open_id, access_token)
+    try:
+        r = requests.post(
+            "http://127.0.0.1:19876/rsaencrypt",
+            json={"plaintext": plaintext},
+            timeout=5,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            if data.get("hex"):
+                return data["hex"]
+    except Exception:
+        pass
+    return build_itopencodeparam_aes(open_id, access_token)
+
+
+def build_itopencodeparam_aes(open_id, access_token):
+    """Fallback: AES-ECB encode (may not work for all servers)."""
     token_str = "{}|{}".format(open_id, access_token)
     token_bytes = token_str.encode("utf-8")
     pad_len = 16 - (len(token_bytes) % 16)
