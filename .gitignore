@@ -5,5 +5,7 @@ certs/
 __pycache__/
 *.pyc
 *.har
+.har_cache.json
+.dd_cookie
 accounts.json
 accounts*.json

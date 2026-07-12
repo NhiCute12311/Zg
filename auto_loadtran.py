@@ -35,7 +35,10 @@ except ImportError:
     sys.exit(1)
 
 try:
-    from garena_login import garena_login, build_itopencodeparam_raw, try_itop_login
+    from garena_login import (
+        garena_login, build_itopencodeparam_raw, try_itop_login,
+        get_datadome, parse_har_datadome, save_har_cache, load_har_cache,
+    )
 except ImportError:
     print("\033[91m[!] Thieu garena_login.py cung thu muc\033[0m")
     sys.exit(1)
@@ -62,6 +65,37 @@ from loadtran import (
 import loadtran
 
 
+_shared_dd = {"dd_cookie": "", "template_cookies": {}, "jspl_payload": ""}
+
+
+def init_datadome(har_path=None):
+    """Initialize DataDome state from HAR or cache. Call once before logins."""
+    if har_path:
+        har_data = parse_har_datadome(har_path)
+        _shared_dd["jspl_payload"] = har_data["jspl_payload"]
+        _shared_dd["template_cookies"] = har_data["template_cookies"]
+        save_har_cache(har_data["jspl_payload"], har_data["template_cookies"])
+        tprint(ok("  HAR parsed: jspl={} bytes, {} cookies".format(
+            len(har_data["jspl_payload"]),
+            len(har_data["template_cookies"]))))
+    else:
+        cached = load_har_cache()
+        _shared_dd["jspl_payload"] = cached.get("jspl_payload", "")
+        _shared_dd["template_cookies"] = cached.get("template_cookies", {})
+        if _shared_dd["jspl_payload"]:
+            tprint(info("  Dung DataDome cache"))
+        else:
+            tprint(warn("  Khong co DataDome cache! Chay voi --har <file.har> lan dau"))
+
+    dd, tc = get_datadome(
+        _shared_dd["template_cookies"], _shared_dd["jspl_payload"])
+    _shared_dd["dd_cookie"] = dd
+    if dd:
+        tprint(ok("  DataDome cookie OK: {}...".format(dd[:30])))
+    else:
+        tprint(warn("  Khong lay duoc DataDome cookie"))
+
+
 def auto_login_account(account, password):
     """Dang nhap Garena va lay token MSDK.
 
@@ -71,13 +105,21 @@ def auto_login_account(account, password):
     tprint(info("  Dang nhap Garena: {}...".format(account)))
 
     try:
-        login_result = garena_login(account, password)
+        login_result = garena_login(
+            account, password,
+            dd_cookie=_shared_dd["dd_cookie"],
+            template_cookies=_shared_dd["template_cookies"],
+            jspl_payload=_shared_dd["jspl_payload"],
+        )
     except Exception as e:
         raise Exception("Garena login that bai: {}".format(str(e)[:100]))
 
     open_id = login_result["open_id"]
     access_token = login_result["access_token"]
     uid = login_result["uid"]
+
+    if login_result.get("datadome"):
+        _shared_dd["dd_cookie"] = login_result["datadome"]
 
     tprint(ok("  Garena OK! uid={} open_id={}...".format(uid, open_id[:16])))
 
@@ -318,7 +360,7 @@ def input_accounts_interactive():
     return accounts
 
 
-def run_auto(accounts, image_dir, rounds_arg, dry_run=False):
+def run_auto(accounts, image_dir, rounds_arg, dry_run=False, har_path=None):
     """Ham chinh — che do tu dong."""
     start_time = time.time()
 
@@ -338,6 +380,10 @@ def run_auto(accounts, image_dir, rounds_arg, dry_run=False):
         print(err("Khong co ket noi internet!"))
         sys.exit(1)
     print(ok("Mang OK"))
+
+    # Init DataDome
+    print("\n" + info("Khoi tao DataDome bypass..."))
+    init_datadome(har_path)
 
     # Set API base
     loadtran.API_BASE = "https://kgvn-api.mobagarena.com"
@@ -607,6 +653,8 @@ if __name__ == "__main__":
             "  python auto_loadtran.py --account user1 --password pass1\n\n"
             "  # Nhieu tai khoan tu file:\n"
             "  python auto_loadtran.py --accounts accounts.json\n\n"
+            "  # Lan dau (can HAR de bypass DataDome):\n"
+            "  python auto_loadtran.py --har game.har\n\n"
             "  # Voi tuy chon:\n"
             "  python auto_loadtran.py --accounts accounts.json "
             "--dir ./anh --rounds 3\n\n"
@@ -629,6 +677,9 @@ if __name__ == "__main__":
                     help="Thu muc chua media (mac dinh: .)")
     ap.add_argument("--rounds", type=int, default=None,
                     help="So vong lap")
+    ap.add_argument("--har",
+                    help="File HAR (HTTP Archive) de lay DataDome bypass.\n"
+                         "Chi can lan dau, sau do dung cache.")
     ap.add_argument("--dry-run", action="store_true",
                     help="Chi kiem tra, khong upload")
     args = ap.parse_args()
@@ -656,8 +707,12 @@ if __name__ == "__main__":
         print(err("Khong co tai khoan nao!"))
         sys.exit(1)
 
+    if args.har and not os.path.exists(args.har):
+        print(err("File HAR khong ton tai: {}".format(args.har)))
+        sys.exit(1)
+
     try:
-        run_auto(accounts, args.dir, args.rounds, args.dry_run)
+        run_auto(accounts, args.dir, args.rounds, args.dry_run, args.har)
     except KeyboardInterrupt:
         print("\n" + err("Huy boi nguoi dung"))
     finally:
