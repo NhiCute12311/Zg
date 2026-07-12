@@ -73,9 +73,10 @@ def garena_login(account, password, session=None):
     s = session or requests.Session()
     ts = str(int(time.time() * 1000))
 
-    # Step 1: prelogin
+    # Step 1: prelogin (follow geo-redirect if needed)
+    base_url = GARENA_CONNECT_BASE
     resp = s.get(
-        GARENA_CONNECT_BASE + "/api/prelogin",
+        base_url + "/api/prelogin",
         params={
             "app_id": APP_ID,
             "account": account,
@@ -86,6 +87,24 @@ def garena_login(account, password, session=None):
         timeout=15,
     )
     pre = resp.json()
+
+    if "url" in pre and "v1" not in pre:
+        geo_url = pre["url"].rstrip("/")
+        ts = str(int(time.time() * 1000))
+        resp = s.get(
+            geo_url + "/api/prelogin",
+            params={
+                "app_id": APP_ID,
+                "account": account,
+                "format": "json",
+                "id": ts,
+            },
+            headers={"User-Agent": WEB_USER_AGENT},
+            timeout=15,
+        )
+        pre = resp.json()
+        base_url = geo_url
+
     if "v1" not in pre or "v2" not in pre:
         raise Exception("prelogin failed: {}".format(json.dumps(pre)[:200]))
 
@@ -96,7 +115,7 @@ def garena_login(account, password, session=None):
     ts2 = str(int(time.time() * 1000))
     encrypted_pw = hash_password(password, v1, v2)
     resp2 = s.get(
-        GARENA_CONNECT_BASE + "/api/login",
+        base_url + "/api/login",
         params={
             "app_id": APP_ID,
             "account": account,
@@ -121,7 +140,7 @@ def garena_login(account, password, session=None):
     # Step 3: OAuth token/grant
     ts3 = str(int(time.time() * 1000))
     resp3 = s.post(
-        GARENA_CONNECT_BASE + "/oauth/token/grant",
+        base_url + "/oauth/token/grant",
         data={
             "client_id": APP_ID,
             "response_type": "code",
@@ -147,7 +166,7 @@ def garena_login(account, password, session=None):
 
     # Step 4: OAuth token/exchange
     resp4 = s.post(
-        GARENA_CONNECT_BASE + "/oauth/token/exchange",
+        base_url + "/oauth/token/exchange",
         data={
             "code": oauth_code,
             "grant_type": "authorization_code",
