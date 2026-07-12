@@ -4,3 +4,6 @@ certs/
 *.log
 __pycache__/
 *.pyc
+*.har
+accounts.json
+accounts*.json
