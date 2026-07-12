@@ -73,37 +73,51 @@ def garena_login(account, password, session=None):
     s = session or requests.Session()
     ts = str(int(time.time() * 1000))
 
+    def _safe_json(r):
+        try:
+            return r.json()
+        except Exception:
+            raise Exception("API error (HTTP {}): {}".format(
+                r.status_code, r.text[:300]))
+
     # Step 1: prelogin (follow geo-redirect if needed)
     base_url = GARENA_CONNECT_BASE
+    prelogin_params = {
+        "app_id": APP_ID,
+        "account": account,
+        "format": "json",
+        "id": ts,
+    }
     resp = s.get(
         base_url + "/api/prelogin",
-        params={
-            "app_id": APP_ID,
-            "account": account,
-            "format": "json",
-            "id": ts,
-        },
+        params=prelogin_params,
         headers={"User-Agent": WEB_USER_AGENT},
         timeout=15,
     )
-    pre = resp.json()
+    pre = _safe_json(resp)
 
     if "url" in pre and "v1" not in pre:
-        geo_url = pre["url"].rstrip("/")
+        geo_raw = pre["url"]
+        from urllib.parse import urlparse
+        parsed = urlparse(geo_raw)
+        geo_base = "{}://{}".format(parsed.scheme, parsed.netloc)
+        geo_path = parsed.path.rstrip("/")
+
+        if "/api/prelogin" in geo_path:
+            prelogin_url = geo_raw
+        else:
+            prelogin_url = geo_base + "/api/prelogin"
+
         ts = str(int(time.time() * 1000))
+        prelogin_params["id"] = ts
         resp = s.get(
-            geo_url + "/api/prelogin",
-            params={
-                "app_id": APP_ID,
-                "account": account,
-                "format": "json",
-                "id": ts,
-            },
+            prelogin_url,
+            params=prelogin_params,
             headers={"User-Agent": WEB_USER_AGENT},
             timeout=15,
         )
-        pre = resp.json()
-        base_url = geo_url
+        pre = _safe_json(resp)
+        base_url = geo_base
 
     if "v1" not in pre or "v2" not in pre:
         raise Exception("prelogin failed: {}".format(json.dumps(pre)[:200]))
