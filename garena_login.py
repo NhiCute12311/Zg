@@ -426,7 +426,7 @@ def build_itopencodeparam_raw(open_id, access_token):
     return combined.hex().upper()
 
 
-def try_itop_login(open_id, access_token, uid, session=None):
+def try_itop_login(open_id, access_token, uid, session=None, debug=False):
     endpoints = [
         "https://itop.kg.garena.vn/auth/login_garena",
         "https://itop.kg.garena.vn/v2/auth/login_garena",
@@ -444,6 +444,10 @@ def try_itop_login(open_id, access_token, uid, session=None):
             resp = requests.post(endpoint, data=post_data,
                                  headers=post_hdrs, timeout=15)
             data = resp.json()
+            if debug:
+                print("  [debug] iTop {} → ret={} keys={}".format(
+                    endpoint.split("/")[-1], data.get("ret"),
+                    list(data.keys())[:6]))
             if data.get("ret") == 0:
                 itop_openid = data.get("openid", "")
                 itop_token = data.get("token", "")
@@ -452,7 +456,10 @@ def try_itop_login(open_id, access_token, uid, session=None):
                 encodeparam = data.get("itopencodeparam", "")
                 if encodeparam:
                     return encodeparam
-        except Exception:
+        except Exception as e:
+            if debug:
+                print("  [debug] iTop {} error: {}".format(
+                    endpoint.split("/")[-1], str(e)[:60]))
             continue
     return None
 

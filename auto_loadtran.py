@@ -36,7 +36,8 @@ except ImportError:
 
 try:
     from garena_login import (
-        garena_login, build_itopencodeparam_raw, try_itop_login,
+        garena_login, build_itopencodeparam, build_itopencodeparam_raw,
+        try_itop_login,
         get_datadome, parse_har_datadome, save_har_cache, load_har_cache,
     )
 except ImportError:
@@ -125,12 +126,12 @@ def auto_login_account(account, password):
 
     # Thu lay token tu iTop
     tprint(info("  Lay MSDK token..."))
-    itop_token = try_itop_login(open_id, access_token, uid)
+    itop_token = try_itop_login(open_id, access_token, uid, debug=True)
     if itop_token:
         tprint(ok("  iTop auth OK! token={}...".format(itop_token[:30])))
     else:
-        itop_token = build_itopencodeparam_raw(open_id, access_token)
-        tprint(info("  Dung raw token: {}...".format(itop_token[:30])))
+        itop_token = build_itopencodeparam(open_id, access_token)
+        tprint(info("  Dung AES token: {}...".format(itop_token[:30])))
 
     return {
         "auth_token": itop_token,
