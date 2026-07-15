@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ZG Lua Injector</string>
+    <string name="module_description">Roblox Lua Script Injector</string>
+    <string name="hint_script">Paste or type your Lua script here...</string>
+    <string name="btn_inject">INJECT</string>
+    <string name="btn_execute">EXECUTE</string>
+    <string name="btn_clear">CLEAR</string>
+    <string name="btn_minimize">_</string>
+    <string name="btn_close">X</string>
+    <string name="status_ready">Ready</string>
+    <string name="status_injected">Script Injected!</string>
+    <string name="status_error">Injection Failed</string>
+    <string name="tab_editor">Editor</string>
+    <string name="tab_scripts">Scripts</string>
+    <string name="tab_settings">Settings</string>
+</resources>
