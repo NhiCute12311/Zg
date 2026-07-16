@@ -84,6 +84,7 @@ public class MainActivity extends Activity {
     private volatile String capturedAccessToken = null;
     private volatile String capturedOpenId = null;
     private volatile String capturedGarenaUid = null;
+    private volatile String capturedExchangeBody = null;
     private volatile boolean tokenProcessing = false;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -280,6 +281,8 @@ public class MainActivity extends Activity {
                 if (url.contains("token/exchange")) {
                     capturedAccessToken = j.optString("access_token", "");
                     capturedOpenId = j.optString("open_id", "");
+                    capturedExchangeBody = body;
+                    log("[Token] Exchange full: " + safe(body, 200));
                     if (capturedAccessToken.length() > 0) {
                         log("[Token] Got access_token + open_id!");
                         mainHandler.post(new Runnable() {
@@ -424,6 +427,7 @@ public class MainActivity extends Activity {
         capturedAccessToken = null;
         capturedOpenId = null;
         capturedGarenaUid = null;
+        capturedExchangeBody = null;
         tokenProcessing = false;
 
         CookieSyncManager.createInstance(this);
@@ -463,7 +467,7 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
-                    doItopAndUsecode(capturedAccessToken, capturedOpenId, capturedGarenaUid);
+                    doItopAndUsecode(capturedAccessToken, capturedOpenId, capturedGarenaUid, capturedExchangeBody);
                 } catch (Exception e) {
                     log("[!] Error: " + e.getMessage());
                 }
@@ -500,6 +504,8 @@ public class MainActivity extends Activity {
             JSONObject j = new JSONObject(resp);
             capturedAccessToken = j.optString("access_token", "");
             capturedOpenId = j.optString("open_id", "");
+            capturedExchangeBody = resp;
+            log("[Exchange] Full: " + safe(resp, 300));
 
             if (capturedAccessToken.length() > 0) {
                 log("[Exchange] OK: open_id=" + safe(capturedOpenId, 16) + "...");
@@ -525,25 +531,29 @@ public class MainActivity extends Activity {
         return sig;
     }
 
-    private void doItopAndUsecode(String accessToken, String openId, String garenaUid) throws Exception {
+    private void doItopAndUsecode(String accessToken, String openId, String garenaUid, String exchangeBody) throws Exception {
         String ts = String.valueOf(System.currentTimeMillis() / 1000);
         String uuid = java.util.UUID.randomUUID().toString();
         String seqTs = String.valueOf(System.currentTimeMillis() / 1000 - 30);
         int seqRand = (int)(Math.random() * 9000) + 1000;
         String seq = GAMEID + "-" + uuid + "-" + seqTs + "-" + seqRand;
 
-        JSONObject ci = new JSONObject();
-        ci.put("token", accessToken);
-        ci.put("openid", openId);
-        if (garenaUid != null && garenaUid.length() > 0) {
-            ci.put("uid", garenaUid);
+        String channelInfoStr = "";
+        if (exchangeBody != null && exchangeBody.length() > 0) {
+            channelInfoStr = exchangeBody;
+        } else {
+            JSONObject ci = new JSONObject();
+            ci.put("access_token", accessToken);
+            ci.put("uid", garenaUid != null ? garenaUid : "");
+            channelInfoStr = ci.toString();
         }
+        log("[ITOP] channel_info=" + safe(channelInfoStr, 200));
 
         JSONObject ib = new JSONObject();
         ib.put("openid", openId);
         ib.put("token", accessToken);
         ib.put("channel_dis", "");
-        ib.put("channel_info", ci.toString());
+        ib.put("channel_info", channelInfoStr);
         ib.put("channelid", Integer.parseInt(CHANNELID));
         ib.put("gameid", Integer.parseInt(GAMEID));
         ib.put("os", 1);
@@ -559,8 +569,8 @@ public class MainActivity extends Activity {
         String qp = qpNoSig + "&sig=" + sig;
 
         log("[ITOP] Login...");
-        log("[ITOP] Body: " + safe(bodyStr, 120));
-        log("[ITOP] URL qp: " + safe(qp, 120));
+        log("[ITOP] Body: " + safe(bodyStr, 500));
+        log("[ITOP] URL qp: " + safe(qp, 200));
         String ir = httpPost(ITOP_BASE + "/v2/auth/login?" + qp,
                 bodyStr, "application/json", "itop.kg.garena.vn", SDK_UA);
         log("[ITOP] Resp: " + safe(ir, 200));
