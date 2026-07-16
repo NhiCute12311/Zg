@@ -514,10 +514,10 @@ public class MainActivity extends Activity {
 
     // ── Game APIs ──
 
-    private String computeItopSig(String queryParams, String token) {
-        String sigBase = token + queryParams + MSDK_SDK_KEY;
+    private String computeItopSig(String path, String queryParams, String body) {
+        String sigBase = path + "?" + queryParams + body + MSDK_SDK_KEY;
         String sig = md5(sigBase);
-        log("[SIG] base=" + safe(sigBase, 60) + "...");
+        log("[SIG] base=" + safe(sigBase, 80) + "...");
         log("[SIG] sig=" + sig);
         return sig;
     }
@@ -539,15 +539,17 @@ public class MainActivity extends Activity {
         ib.put("seq", seq);
         ib.put("ts", ts);
 
+        String bodyStr = ib.toString();
+
         String qpNoSig = "channelid=" + CHANNELID + "&encrypt=0&gameid=" + GAMEID
                 + "&lang=&os=1&seq=" + seq + "&ts=" + ts + "&version=null";
-        String sig = computeItopSig(qpNoSig, accessToken);
+        String sig = computeItopSig("/v2/auth/login", qpNoSig, bodyStr) + "1";
         String qp = qpNoSig + "&sig=" + sig;
 
         log("[ITOP] Login...");
-        log("[ITOP] Body: " + safe(ib.toString(), 100));
+        log("[ITOP] Body: " + safe(bodyStr, 100));
         String ir = httpPost(ITOP_BASE + "/v2/auth/login?" + qp,
-                ib.toString(), "application/json", "itop.kg.garena.vn", SDK_UA);
+                bodyStr, "application/json", "itop.kg.garena.vn", SDK_UA);
         log("[ITOP] Resp: " + safe(ir, 200));
         JSONObject ij = new JSONObject(ir);
 
