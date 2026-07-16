@@ -541,13 +541,14 @@ public class MainActivity extends Activity {
 
         String bodyStr = ib.toString();
 
-        String qpNoSig = "channelid=" + CHANNELID + "&encrypt=0&gameid=" + GAMEID
+        String qpNoSig = "channelid=" + CHANNELID + "&gameid=" + GAMEID
                 + "&lang=&os=1&seq=" + seq + "&ts=" + ts + "&version=null";
-        String sig = computeItopSig("/v2/auth/login", qpNoSig, bodyStr) + "1";
+        String sig = computeItopSig("/v2/auth/login", qpNoSig, bodyStr);
         String qp = qpNoSig + "&sig=" + sig;
 
         log("[ITOP] Login...");
-        log("[ITOP] Body: " + safe(bodyStr, 100));
+        log("[ITOP] Body: " + safe(bodyStr, 120));
+        log("[ITOP] URL qp: " + safe(qp, 120));
         String ir = httpPost(ITOP_BASE + "/v2/auth/login?" + qp,
                 bodyStr, "application/json", "itop.kg.garena.vn", SDK_UA);
         log("[ITOP] Resp: " + safe(ir, 200));
