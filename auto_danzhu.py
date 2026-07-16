@@ -94,8 +94,8 @@ def md5(s: str) -> str:
     return hashlib.md5(s.encode("utf-8")).hexdigest()
 
 
-def garena_password_hash(password: str, v2: str) -> str:
-    return md5(md5(password) + v2)
+def garena_password_hash(password: str) -> str:
+    return md5(password)
 
 
 def ts_ms() -> str:
@@ -503,7 +503,7 @@ def garena_login(session, account, password):
         raise RuntimeError(f"Prelogin khong tra ve v2: {prelogin_data}")
 
     # Step 2: Login
-    pw_hash = garena_password_hash(password, v2)
+    pw_hash = garena_password_hash(password)
     login_url = (
         f"{GARENA_CONNECT_BASE}/api/login?"
         f"app_id={GARENA_APP_ID}"
@@ -578,7 +578,11 @@ def full_login(username, password, dd, template_cookies, jspl_payload):
     """Login Garena voi tu dong refresh DataDome neu bi block."""
     for attempt in range(3):
         session = make_session(dd, template_cookies)
-        result = garena_login(session, username, password)
+        try:
+            result = garena_login(session, username, password)
+        except Exception as e:
+            log(f"  [!] Garena login loi: {e}")
+            return None, dd
 
         if isinstance(result, dict) and result.get("_captcha"):
             if attempt < 2:
