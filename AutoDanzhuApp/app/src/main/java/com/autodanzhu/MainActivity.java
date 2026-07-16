@@ -54,6 +54,7 @@ public class MainActivity extends Activity {
     private static final String AREA_ID = "1";
     private static final String UNITY_UA = "UnityPlayer/2022.3.5f1 (UnityWebRequest/1.0, libcurl/8.1.1-DEV)";
     private static final String SDK_UA = "GarenaMSDK/4.0.38(SM-A165F ;Android 15;vi;VN;)";
+    private static final String MSDK_SDK_KEY = "4dfd535a3a2ef92644301c3e3ce87c9f";
 
     private static final String LOGIN_URL = CONNECT_BASE + "/universal/oauth?"
             + "redirect_uri=" + Uri.encode(REDIRECT_URI)
@@ -513,9 +514,20 @@ public class MainActivity extends Activity {
 
     // ── Game APIs ──
 
+    private String computeItopSig(String queryParams, String token) {
+        String sigBase = token + queryParams + MSDK_SDK_KEY;
+        String sig = md5(sigBase);
+        log("[SIG] base=" + safe(sigBase, 60) + "...");
+        log("[SIG] sig=" + sig);
+        return sig;
+    }
+
     private void doItopAndUsecode(String accessToken, String openId) throws Exception {
         String ts = String.valueOf(System.currentTimeMillis() / 1000);
-        String seq = GAMEID + "-auto-" + ts;
+        String uuid = java.util.UUID.randomUUID().toString();
+        String seqTs = String.valueOf(System.currentTimeMillis() / 1000 - 30);
+        int seqRand = (int)(Math.random() * 9000) + 1000;
+        String seq = GAMEID + "-" + uuid + "-" + seqTs + "-" + seqRand;
 
         JSONObject ib = new JSONObject();
         ib.put("openid", openId);
@@ -527,12 +539,16 @@ public class MainActivity extends Activity {
         ib.put("seq", seq);
         ib.put("ts", ts);
 
-        String qp = "channelid=" + CHANNELID + "&encrypt=0&gameid=" + GAMEID
+        String qpNoSig = "channelid=" + CHANNELID + "&encrypt=0&gameid=" + GAMEID
                 + "&lang=&os=1&seq=" + seq + "&ts=" + ts + "&version=null";
+        String sig = computeItopSig(qpNoSig, accessToken);
+        String qp = qpNoSig + "&sig=" + sig;
 
         log("[ITOP] Login...");
+        log("[ITOP] Body: " + safe(ib.toString(), 100));
         String ir = httpPost(ITOP_BASE + "/v2/auth/login?" + qp,
                 ib.toString(), "application/json", "itop.kg.garena.vn", SDK_UA);
+        log("[ITOP] Resp: " + safe(ir, 200));
         JSONObject ij = new JSONObject(ir);
 
         int ret = ij.optInt("ret", -1);
