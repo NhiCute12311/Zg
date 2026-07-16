@@ -8,7 +8,11 @@ Flow:
   3. AOV Cloud: danzhu/usecode - nhap ma moi ban be
 
 Usage:
+  pip install curl_cffi
   python3 auto_danzhu.py --accounts accounts.txt --code MA_MOI_CUA_BAN
+
+  # Neu van bi captcha, lay datadome cookie tu trinh duyet:
+  python3 auto_danzhu.py -a accounts.txt -c MA_MOI --datadome "COOKIE_VALUE"
 
 accounts.txt format (moi dong 1 tai khoan):
   username:password
@@ -18,11 +22,18 @@ accounts.txt format (moi dong 1 tai khoan):
 import argparse
 import hashlib
 import json
-import re
 import sys
 import time
 import urllib.parse
-import requests
+import uuid
+import re
+
+try:
+    from curl_cffi import requests as curl_requests
+    HAS_CURL_CFFI = True
+except ImportError:
+    HAS_CURL_CFFI = False
+    import requests as fallback_requests
 
 GARENA_APP_ID = "100054"
 GARENA_CLIENT_SECRET = "027709b12673a3e18de16bf9b85723a2d55e9bffd3364aea67f176e533f69515"
@@ -44,8 +55,10 @@ BROWSER_UA = (
 )
 UNITY_UA = "UnityPlayer/2022.3.5f1 (UnityWebRequest/1.0, libcurl/8.1.1-DEV)"
 SDK_UA = "GarenaMSDK/4.0.38(SM-A165F ;Android 15;vi;VN;)"
-
 DEVICE_ID = "57-28-68-BF-29-40-4E-F0-32-40-8B-66-3A-12-E1-F7"
+
+MAX_RETRIES = 3
+RETRY_DELAY = 5
 
 
 def md5(s: str) -> str:
@@ -60,54 +73,173 @@ def ts_ms() -> str:
     return str(int(time.time() * 1000))
 
 
-def garena_login(session: requests.Session, account: str, password: str) -> dict:
+def create_session(datadome_cookie: str = ""):
+    if HAS_CURL_CFFI:
+        session = curl_requests.Session(impersonate="chrome120")
+    else:
+        session = fallback_requests.Session()
+
+    if datadome_cookie:
+        session.cookies.set("datadome", datadome_cookie, domain=".garena.com")
+
+    return session
+
+
+def handle_datadome_403(session, resp):
     """
-    Dang nhap Garena Connect va tra ve access_token, open_id, uid.
+    Xu ly DataDome 403: lay interstitial URL, gui device check, lay cookie moi.
+    Tra ve True neu bypass thanh cong.
     """
-    session.headers.update({
+    try:
+        data = resp.json()
+    except Exception:
+        return False
+
+    interstitial_url = data.get("url", "")
+    if not interstitial_url:
+        return False
+
+    parsed = urllib.parse.urlparse(interstitial_url)
+    params = urllib.parse.parse_qs(parsed.query)
+
+    cid = params.get("cid", [""])[0]
+    hash_val = params.get("hash", [""])[0]
+    s_val = params.get("s", [""])[0]
+    e_val = params.get("e", [""])[0]
+    b_val = params.get("b", [""])[0]
+    referer = params.get("referer", [""])[0]
+    t_val = params.get("t", [""])[0]
+
+    if not cid or not hash_val:
+        return False
+
+    # Step 1: GET interstitial page (de lay cookies)
+    try:
+        interstitial_resp = session.get(interstitial_url, headers={
+            "User-Agent": BROWSER_UA,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        })
+    except Exception:
+        return False
+
+    # Step 2: POST interstitial device check
+    try:
+        seed = str(uuid.uuid4())
+        post_data = {
+            "cid": cid,
+            "hash": hash_val,
+            "referer": referer or "HTTPS://100054.connect.garena.com/api/prelogin",
+            "url": referer or "HTTPS://100054.connect.garena.com/api/prelogin",
+            "s": s_val,
+            "e": e_val,
+            "b": b_val,
+            "dm": "jd",
+            "seed": seed,
+            "ps": "13338",
+        }
+
+        check_resp = session.post(
+            "https://geo.captcha-delivery.com/interstitial/",
+            data=post_data,
+            headers={
+                "User-Agent": BROWSER_UA,
+                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                "Accept": "*/*",
+                "Origin": "https://geo.captcha-delivery.com",
+                "Referer": interstitial_url,
+                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+                "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Android WebView";v="150"',
+                "sec-ch-ua-mobile": "?1",
+                "sec-ch-ua-platform": '"Android"',
+                "X-Requested-With": "com.garena.game.kgvn",
+            },
+        )
+
+        result = check_resp.json()
+        cookie_str = result.get("cookie", "")
+        if cookie_str and "datadome=" in cookie_str:
+            cookie_val = cookie_str.split("datadome=")[1].split(";")[0]
+            session.cookies.set("datadome", cookie_val, domain=".garena.com")
+            return True
+    except Exception:
+        pass
+
+    return False
+
+
+def garena_login(session, account: str, password: str) -> dict:
+    common_headers = {
         "User-Agent": BROWSER_UA,
         "Accept": "application/json, text/plain, */*",
         "X-Requested-With": "com.garena.game.kgvn",
+        "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+        "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Android WebView";v="150"',
+        "sec-ch-ua-mobile": "?1",
+        "sec-ch-ua-platform": '"Android"',
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-Mode": "cors",
+        "Sec-Fetch-Dest": "empty",
         "Referer": (
             f"{GARENA_CONNECT_BASE}/universal/oauth?"
             f"redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
             f"&response_type=code&client_id={GARENA_APP_ID}"
             f"&login_scenario=normal&locale=vi-VN"
         ),
-    })
+    }
 
-    # Step 0: Load oauth page to get initial cookies
+    # Step 0: Load OAuth page for initial cookies
     oauth_url = (
         f"{GARENA_CONNECT_BASE}/api/universal/oauth?"
         f"redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
         f"&response_type=code&client_id={GARENA_APP_ID}"
         f"&login_scenario=normal&locale=vi-VN&format=json&id={ts_ms()}"
     )
-    resp = session.get(oauth_url)
-    resp.raise_for_status()
+    session.get(oauth_url, headers=common_headers)
+    time.sleep(0.5)
 
-    # Step 1: Prelogin - lay v1, v2
-    prelogin_url = (
-        f"{GARENA_CONNECT_BASE}/api/prelogin?"
-        f"app_id={GARENA_APP_ID}"
-        f"&account={urllib.parse.quote(account)}"
-        f"&format=json&id={ts_ms()}"
-    )
-    resp = session.get(prelogin_url)
-    if resp.status_code == 403:
-        data = resp.json()
-        if "url" in data:
-            raise RuntimeError(
-                f"[{account}] DataDome captcha! URL: {data['url'][:80]}...\n"
-                f"  -> Can them datadome cookie vao file cookie hoac doi 1 phut roi thu lai."
-            )
-        raise RuntimeError(f"[{account}] Prelogin 403: {resp.text[:200]}")
-    resp.raise_for_status()
-    prelogin_data = resp.json()
-    v1 = prelogin_data.get("v1", "")
-    v2 = prelogin_data.get("v2", "")
+    # Step 1: Prelogin - lay v1, v2 (voi retry DataDome)
+    v2 = ""
+    for attempt in range(MAX_RETRIES):
+        prelogin_url = (
+            f"{GARENA_CONNECT_BASE}/api/prelogin?"
+            f"app_id={GARENA_APP_ID}"
+            f"&account={urllib.parse.quote(account)}"
+            f"&format=json&id={ts_ms()}"
+        )
+        resp = session.get(prelogin_url, headers=common_headers)
+
+        if resp.status_code == 403:
+            print(f"  [!] DataDome 403 (lan {attempt+1}/{MAX_RETRIES}), dang thu bypass...")
+            bypassed = handle_datadome_403(session, resp)
+            if bypassed:
+                print(f"  [+] DataDome bypass OK, thu lai...")
+                time.sleep(RETRY_DELAY)
+                continue
+            else:
+                if attempt < MAX_RETRIES - 1:
+                    print(f"  [!] Bypass khong thanh cong, doi {RETRY_DELAY}s roi thu lai...")
+                    time.sleep(RETRY_DELAY)
+                    continue
+                raise RuntimeError(
+                    f"[{account}] DataDome captcha sau {MAX_RETRIES} lan thu.\n"
+                    f"  -> Dung --datadome COOKIE de truyen cookie thu cong.\n"
+                    f"  -> Lay cookie: Mo trinh duyet -> garena.com -> F12 -> Application -> Cookies -> datadome"
+                )
+
+        resp.raise_for_status()
+        prelogin_data = resp.json()
+        v2 = prelogin_data.get("v2", "")
+        if v2:
+            break
+        if "url" in prelogin_data:
+            if attempt < MAX_RETRIES - 1:
+                time.sleep(RETRY_DELAY)
+                continue
+            raise RuntimeError(f"[{account}] Prelogin tra ve captcha URL")
+
     if not v2:
-        raise RuntimeError(f"[{account}] Prelogin khong tra ve v2: {prelogin_data}")
+        raise RuntimeError(f"[{account}] Prelogin khong tra ve v2 sau {MAX_RETRIES} lan thu")
 
     # Step 2: Login - gui password da hash
     pw_hash = garena_password_hash(password, v2)
@@ -119,9 +251,14 @@ def garena_login(session: requests.Session, account: str, password: str) -> dict
         f"&redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
         f"&format=json&id={ts_ms()}"
     )
-    resp = session.get(login_url)
+    resp = session.get(login_url, headers=common_headers)
     if resp.status_code == 403:
-        raise RuntimeError(f"[{account}] Login bi captcha (DataDome).")
+        bypassed = handle_datadome_403(session, resp)
+        if bypassed:
+            time.sleep(1)
+            resp = session.get(login_url, headers=common_headers)
+        if resp.status_code == 403:
+            raise RuntimeError(f"[{account}] Login bi DataDome captcha.")
     resp.raise_for_status()
     login_data = resp.json()
     if "error" in login_data:
@@ -134,38 +271,45 @@ def garena_login(session: requests.Session, account: str, password: str) -> dict
 
     # Step 3: Token Grant - lay authorization code
     grant_url = f"{GARENA_CONNECT_BASE}/oauth/token/grant"
-    grant_data = {
-        "client_id": GARENA_APP_ID,
-        "response_type": "code",
-        "redirect_uri": GARENA_REDIRECT_URI,
-        "login_scenario": "normal",
-        "format": "json",
-        "id": ts_ms(),
+    grant_headers = {
+        **common_headers,
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Origin": GARENA_CONNECT_BASE,
     }
-    resp = session.post(grant_url, data=grant_data)
+    grant_data = (
+        f"client_id={GARENA_APP_ID}"
+        f"&response_type=code"
+        f"&redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
+        f"&login_scenario=normal"
+        f"&format=json"
+        f"&id={ts_ms()}"
+    )
+    resp = session.post(grant_url, data=grant_data, headers=grant_headers)
     resp.raise_for_status()
     grant_result = resp.json()
     code = grant_result.get("code", "")
     if not code:
         raise RuntimeError(f"[{account}] Token grant khong co code: {grant_result}")
 
-    # Step 4: Token Exchange - lay access_token
+    # Step 4: Token Exchange - lay access_token (dung session rieng voi SDK UA)
     exchange_url = f"{GARENA_CONNECT_BASE}/oauth/token/exchange"
-    exchange_session = requests.Session()
-    exchange_session.headers.update({
+    exchange_data = (
+        f"code={code}"
+        f"&grant_type=authorization_code"
+        f"&login_scenario=normal"
+        f"&redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
+        f"&source=2"
+        f"&client_secret={GARENA_CLIENT_SECRET}"
+        f"&client_id={GARENA_APP_ID}"
+    )
+    if HAS_CURL_CFFI:
+        exchange_session = curl_requests.Session(impersonate="chrome120")
+    else:
+        exchange_session = fallback_requests.Session()
+    resp = exchange_session.post(exchange_url, data=exchange_data, headers={
         "User-Agent": SDK_UA,
         "Content-Type": "application/x-www-form-urlencoded",
     })
-    exchange_data = {
-        "code": code,
-        "grant_type": "authorization_code",
-        "login_scenario": "normal",
-        "redirect_uri": GARENA_REDIRECT_URI,
-        "source": "2",
-        "client_secret": GARENA_CLIENT_SECRET,
-        "client_id": GARENA_APP_ID,
-    }
-    resp = exchange_session.post(exchange_url, data=exchange_data)
     resp.raise_for_status()
     exchange_result = resp.json()
     access_token = exchange_result.get("access_token", "")
@@ -184,55 +328,52 @@ def garena_login(session: requests.Session, account: str, password: str) -> dict
 
 
 def itop_login(access_token: str, open_id: str) -> dict:
-    """
-    Dang nhap ITOP game server (khong encrypt).
-    Tra ve aov_token, GameOpenId, gameToken.
-    """
     ts = str(int(time.time()))
     seq_id = f"{ITOP_GAMEID}-auto-{ts}"
 
-    body = {
+    body = json.dumps({
         "openid": open_id,
         "token": access_token,
-        "sig": "",
         "channelid": int(ITOP_CHANNELID),
         "gameid": int(ITOP_GAMEID),
         "os": 1,
         "lang": "",
         "seq": seq_id,
         "ts": ts,
-    }
+    })
 
-    params = {
-        "channelid": ITOP_CHANNELID,
-        "encrypt": "0",
-        "gameid": ITOP_GAMEID,
-        "lang": "",
-        "os": "1",
-        "seq": seq_id,
-        "ts": ts,
-        "version": "null",
-    }
+    params = (
+        f"channelid={ITOP_CHANNELID}"
+        f"&encrypt=0"
+        f"&gameid={ITOP_GAMEID}"
+        f"&lang="
+        f"&os=1"
+        f"&seq={seq_id}"
+        f"&ts={ts}"
+        f"&version=null"
+    )
 
-    url = f"{ITOP_BASE}/v2/auth/login"
+    url = f"{ITOP_BASE}/v2/auth/login?{params}"
     headers = {
         "Content-Type": "application/json",
         "Host": "itop.kg.garena.vn",
     }
 
-    resp = requests.post(url, params=params, json=body, headers=headers, timeout=15)
+    if HAS_CURL_CFFI:
+        resp = curl_requests.post(url, data=body, headers=headers, timeout=15)
+    else:
+        resp = fallback_requests.post(url, data=body, headers=headers, timeout=15)
     resp.raise_for_status()
 
     try:
         result = resp.json()
-    except json.JSONDecodeError:
-        result_text = resp.text
+    except Exception:
         raise RuntimeError(
-            f"ITOP login response khong phai JSON (co the can encrypt=1): {result_text[:200]}"
+            f"ITOP response khong phai JSON (co the can encrypt=1): {resp.text[:200]}"
         )
 
     if result.get("ret", -1) != 0:
-        raise RuntimeError(f"ITOP login loi: {result}")
+        raise RuntimeError(f"ITOP login loi: ret={result.get('ret')}, msg={result.get('msg','')}")
 
     token_info = result.get("token_info", {})
     aov_token = token_info.get("aov_token", result.get("aov_token", ""))
@@ -247,15 +388,7 @@ def itop_login(access_token: str, open_id: str) -> dict:
     }
 
 
-def use_invitation_code(
-    aov_token: str,
-    game_openid: str,
-    game_token: str,
-    invitation_code: str,
-) -> dict:
-    """
-    Goi API danzhu/usecode de nhap ma moi ban be.
-    """
+def use_invitation_code(aov_token, game_openid, game_token, invitation_code):
     url = f"{AOV_CLOUD_BASE}/vn_online/danzhu/usecode"
 
     userinfo = json.dumps({
@@ -286,67 +419,21 @@ def use_invitation_code(
         "X-Unity-Version": "2022.3.5f1",
     }
 
-    body = {"invitationCode": invitation_code}
-    resp = requests.post(url, json=body, headers=headers, timeout=15)
-    resp.raise_for_status()
-    result = resp.json()
-    return result
-
-
-def get_startup_data(
-    aov_token: str,
-    game_openid: str,
-    game_token: str,
-) -> dict:
-    """
-    Goi API danzhu/getstartupdata de lay thong tin su kien.
-    """
-    url = f"{AOV_CLOUD_BASE}/vn_online/danzhu/getstartupdata"
-
-    userinfo = json.dumps({
-        "uin": game_openid,
-        "areaID": AOV_AREA_ID,
-        "roleID": game_openid,
-        "platform": "1",
-        "accType": "Guest",
-        "partitionID": AOV_PARTITION,
-    }, separators=(",", ":"))
-
-    headers = {
-        "Host": "aovcloud.garena.com",
-        "User-Agent": UNITY_UA,
-        "Accept": "*/*",
-        "Content-Type": "application/json; charset=utf-8",
-        "aov_token": aov_token,
-        "GameOpenId": game_openid,
-        "gameToken": game_token,
-        "channel": "1",
-        "platId": "1",
-        "partition": AOV_PARTITION,
-        "areaId": AOV_AREA_ID,
-        "userinfo": userinfo,
-        "lang": "VN",
-        "version": "0.0.6",
-        "gmTimeStamp": str(int(time.time())),
-        "X-Unity-Version": "2022.3.5f1",
-    }
-
-    body = {"deviceId": DEVICE_ID}
-    resp = requests.post(url, json=body, headers=headers, timeout=15)
+    body = json.dumps({"invitationCode": invitation_code})
+    if HAS_CURL_CFFI:
+        resp = curl_requests.post(url, data=body, headers=headers, timeout=15)
+    else:
+        resp = fallback_requests.post(url, data=body, headers=headers, timeout=15)
     resp.raise_for_status()
     return resp.json()
 
 
-def process_account(account: str, password: str, invitation_code: str, delay: float = 2.0):
-    """
-    Xu ly 1 tai khoan: login -> nhap ma moi.
-    """
+def process_account(account, password, invitation_code, datadome_cookie="", delay=2.0):
     print(f"\n{'='*60}")
     print(f"[*] Dang xu ly: {account}")
     print(f"{'='*60}")
 
-    session = requests.Session()
-    session.verify = True
+    session = create_session(datadome_cookie)
 
     # Step 1: Garena Connect login
     try:
@@ -366,7 +453,6 @@ def process_account(account: str, password: str, invitation_code: str, delay: fl
         print(f"  [+] ITOP login OK: GameOpenId={itop_result['game_openid']}")
     except Exception as e:
         print(f"  [!] ITOP login THAT BAI: {e}")
-        print(f"  [!] Neu loi 'encrypt', ban can dung phien ban co ho tro INTL SDK encryption.")
         return False
 
     time.sleep(delay)
@@ -391,31 +477,25 @@ def process_account(account: str, password: str, invitation_code: str, delay: fl
                 print(f"  [+] Ma moi cua tai khoan nay: {own_code}")
         else:
             print(f"  [!] Nhap ma that bai: code={code}, msg={msg}")
-            if code == 1:
-                print(f"      -> Co the da nhap ma roi hoac ma khong hop le")
-
         return code == 0
     except Exception as e:
         print(f"  [!] Nhap ma loi: {e}")
         return False
 
 
-def load_accounts(filepath: str) -> list:
-    """
-    Doc danh sach tai khoan tu file.
-    Format moi dong: account:password
-    """
+def load_accounts(filepath):
     accounts = []
     with open(filepath, "r", encoding="utf-8") as f:
         for line_num, line in enumerate(f, 1):
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split(":", 1)
-            if len(parts) != 2:
+            idx = line.find(":")
+            if idx == -1:
                 print(f"  [!] Dong {line_num} sai format (can account:password): {line}")
                 continue
-            account, password = parts[0].strip(), parts[1].strip()
+            account = line[:idx].strip()
+            password = line[idx+1:].strip()
             if account and password:
                 accounts.append((account, password))
     return accounts
@@ -425,56 +505,50 @@ def main():
     parser = argparse.ArgumentParser(
         description="Auto nhap ma moi - Su kien Chung Suc Ban Bi (Lien Quan Mobile VN)"
     )
-    parser.add_argument(
-        "--accounts", "-a",
-        required=True,
-        help="Duong dan file chua danh sach tai khoan (account:password)",
-    )
-    parser.add_argument(
-        "--code", "-c",
-        required=True,
-        help="Ma moi ban be can nhap (vi du: 7Fr64s5RL6)",
-    )
-    parser.add_argument(
-        "--delay", "-d",
-        type=float,
-        default=3.0,
-        help="Thoi gian cho giua cac buoc (giay, mac dinh: 3)",
-    )
-    parser.add_argument(
-        "--account-delay",
-        type=float,
-        default=5.0,
-        help="Thoi gian cho giua cac tai khoan (giay, mac dinh: 5)",
-    )
+    parser.add_argument("--accounts", "-a", required=True,
+        help="File danh sach tai khoan (account:password)")
+    parser.add_argument("--code", "-c", required=True,
+        help="Ma moi ban be can nhap (vd: 7Fr64s5RL6)")
+    parser.add_argument("--delay", "-d", type=float, default=3.0,
+        help="Delay giua cac buoc (giay, mac dinh: 3)")
+    parser.add_argument("--account-delay", type=float, default=5.0,
+        help="Delay giua cac tai khoan (giay, mac dinh: 5)")
+    parser.add_argument("--datadome", default="",
+        help="DataDome cookie (lay tu trinh duyet neu bi captcha)")
     args = parser.parse_args()
+
+    if not HAS_CURL_CFFI:
+        print("[!] CANH BAO: Khong tim thay curl_cffi - de bi DataDome chan!")
+        print("[!] Cai dat: pip install curl_cffi")
+        print()
 
     accounts = load_accounts(args.accounts)
     if not accounts:
         print("[!] Khong tim thay tai khoan nao trong file.")
         sys.exit(1)
 
+    print(f"[*] HTTP client: {'curl_cffi (Chrome TLS)' if HAS_CURL_CFFI else 'requests (de bi chan)'}")
     print(f"[*] Da doc {len(accounts)} tai khoan")
     print(f"[*] Ma moi: {args.code}")
-    print(f"[*] Delay giua cac buoc: {args.delay}s")
-    print(f"[*] Delay giua cac tai khoan: {args.account_delay}s")
+    if args.datadome:
+        print(f"[*] DataDome cookie: {args.datadome[:30]}...")
 
-    success_count = 0
-    fail_count = 0
+    success = 0
+    fail = 0
 
     for i, (account, password) in enumerate(accounts):
         if i > 0:
-            print(f"\n[*] Cho {args.account_delay}s truoc tai khoan tiep theo...")
+            print(f"\n[*] Cho {args.account_delay}s...")
             time.sleep(args.account_delay)
 
-        ok = process_account(account, password, args.code, delay=args.delay)
+        ok = process_account(account, password, args.code, args.datadome, args.delay)
         if ok:
-            success_count += 1
+            success += 1
         else:
-            fail_count += 1
+            fail += 1
 
     print(f"\n{'='*60}")
-    print(f"[*] HOAN TAT: {success_count} thanh cong, {fail_count} that bai / {len(accounts)} tong")
+    print(f"[*] KET QUA: {success} thanh cong, {fail} that bai / {len(accounts)} tong")
     print(f"{'='*60}")
 
 
