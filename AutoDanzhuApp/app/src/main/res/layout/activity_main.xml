@@ -3,62 +3,31 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="12dp">
+    android:padding="10dp">
 
-    <LinearLayout
+    <EditText
+        android:id="@+id/etFilePath"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
+        android:hint="Duong dan file accounts (vd: /sdcard/accounts.txt)"
+        android:textSize="13sp"
+        android:inputType="text"
+        android:singleLine="true" />
 
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/etFilePath"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="File accounts (account:password)"
-            android:textSize="13sp"
-            android:inputType="text"
-            android:singleLine="true" />
-
-        <Button
-            android:id="@+id/btnPickFile"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:text="..."
-            android:minWidth="48dp" />
-    </LinearLayout>
-
-    <LinearLayout
+    <EditText
+        android:id="@+id/etCode"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:layout_marginTop="4dp"
-        android:orientation="horizontal"
-        android:gravity="center_vertical">
-
-        <com.google.android.material.textfield.TextInputEditText
-            android:id="@+id/etCode"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="Ma moi (invitation code)"
-            android:textSize="13sp"
-            android:inputType="text"
-            android:singleLine="true" />
-
-        <Spinner
-            android:id="@+id/spEvent"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="4dp"
-            android:entries="@array/event_types" />
-    </LinearLayout>
+        android:hint="Ma moi (invitation code)"
+        android:textSize="13sp"
+        android:inputType="text"
+        android:singleLine="true" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
+        android:layout_marginTop="6dp"
         android:orientation="horizontal">
 
         <Button
@@ -66,24 +35,26 @@
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:text="BAT DAU" />
+            android:text="BAT DAU"
+            android:textSize="13sp" />
 
         <Button
             android:id="@+id/btnStop"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:layout_marginStart="8dp"
+            android:layout_marginLeft="6dp"
             android:text="DUNG"
+            android:textSize="13sp"
             android:enabled="false" />
 
         <Button
             android:id="@+id/btnToggleWeb"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
+            android:layout_marginLeft="6dp"
             android:text="WEB"
-            android:minWidth="60dp" />
+            android:textSize="13sp" />
     </LinearLayout>
 
     <TextView
@@ -109,15 +80,15 @@
         android:layout_height="0dp"
         android:layout_weight="1"
         android:layout_marginTop="4dp"
-        android:background="#1A000000"
-        android:padding="8dp">
+        android:background="#11000000"
+        android:padding="6dp">
 
         <TextView
             android:id="@+id/tvLog"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:textSize="11sp"
-            android:fontFamily="monospace"
+            android:typeface="monospace"
             android:textIsSelectable="true" />
     </ScrollView>
 </LinearLayout>

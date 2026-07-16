@@ -1,17 +1,19 @@
-plugins {
-    id 'com.android.application'
-}
+apply plugin: 'com.android.application'
 
 android {
-    namespace 'com.autodanzhu'
-    compileSdk 34
+    compileSdkVersion 28
 
     defaultConfig {
         applicationId "com.autodanzhu"
-        minSdk 24
-        targetSdk 34
+        minSdkVersion 21
+        targetSdkVersion 28
         versionCode 1
         versionName "1.0"
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_7
+        targetCompatibility JavaVersion.VERSION_1_7
     }
 
     buildTypes {
@@ -19,15 +21,7 @@ android {
             minifyEnabled false
         }
     }
-
-    compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
-    }
 }
 
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.google.android.material:material:1.11.0'
-    implementation 'androidx.webkit:webkit:1.9.0'
 }
