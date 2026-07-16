@@ -3,15 +3,20 @@
 Auto Login & Nhap Ma Moi - Su kien Chung Suc Ban Bi (Lien Quan Mobile VN)
 
 Flow:
-  1. Garena Connect OAuth: prelogin -> login -> token/grant -> token/exchange
-  2. ITOP Game Login: get aov_token, GameOpenId, gameToken
-  3. AOV Cloud: danzhu/usecode - nhap ma moi ban be
+  1. Lay DataDome cookie (Playwright tu dong hoac --datadome thu cong)
+  2. Garena Connect OAuth: prelogin -> login -> token/grant -> token/exchange
+  3. ITOP Game Login: get aov_token, GameOpenId, gameToken
+  4. AOV Cloud: danzhu/usecode - nhap ma moi ban be
 
-Usage:
-  pip install curl_cffi
-  python3 auto_danzhu.py --accounts accounts.txt --code MA_MOI_CUA_BAN
+Cach dung:
+  # Cach 1: Tu dong bang Playwright (can may tinh co Chrome)
+  pip install playwright curl_cffi
+  python3 auto_danzhu.py --accounts accounts.txt --code MA_MOI
 
-  # Neu van bi captcha, lay datadome cookie tu trinh duyet:
+  # Cach 2: Thu cong (phu hop Termux/Android)
+  # Buoc 1: Lay cookie
+  python3 auto_danzhu.py --get-cookie
+  # Buoc 2: Chay voi cookie
   python3 auto_danzhu.py -a accounts.txt -c MA_MOI --datadome "COOKIE_VALUE"
 
 accounts.txt format (moi dong 1 tai khoan):
@@ -25,7 +30,6 @@ import json
 import sys
 import time
 import urllib.parse
-import uuid
 import re
 
 try:
@@ -33,7 +37,18 @@ try:
     HAS_CURL_CFFI = True
 except ImportError:
     HAS_CURL_CFFI = False
-    import requests as fallback_requests
+
+try:
+    import requests as std_requests
+    HAS_REQUESTS = True
+except ImportError:
+    HAS_REQUESTS = False
+
+try:
+    from playwright.sync_api import sync_playwright
+    HAS_PLAYWRIGHT = True
+except ImportError:
+    HAS_PLAYWRIGHT = False
 
 GARENA_APP_ID = "100054"
 GARENA_CLIENT_SECRET = "027709b12673a3e18de16bf9b85723a2d55e9bffd3364aea67f176e533f69515"
@@ -55,10 +70,13 @@ BROWSER_UA = (
 )
 UNITY_UA = "UnityPlayer/2022.3.5f1 (UnityWebRequest/1.0, libcurl/8.1.1-DEV)"
 SDK_UA = "GarenaMSDK/4.0.38(SM-A165F ;Android 15;vi;VN;)"
-DEVICE_ID = "57-28-68-BF-29-40-4E-F0-32-40-8B-66-3A-12-E1-F7"
 
-MAX_RETRIES = 3
-RETRY_DELAY = 5
+OAUTH_URL = (
+    f"{GARENA_CONNECT_BASE}/universal/oauth?"
+    f"redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
+    f"&response_type=code&client_id={GARENA_APP_ID}"
+    f"&login_scenario=normal&locale=vi-VN"
+)
 
 
 def md5(s: str) -> str:
@@ -73,11 +91,195 @@ def ts_ms() -> str:
     return str(int(time.time() * 1000))
 
 
-def create_session(datadome_cookie: str = ""):
+def find_chromium_path():
+    """Tim duong dan Chromium tren he thong."""
+    import shutil
+    import os
+    import glob
+
+    pw_paths = glob.glob("/opt/pw-browsers/chromium*/chrome-linux/chrome")
+    if pw_paths:
+        return pw_paths[0]
+
+    for name in ["chromium", "chromium-browser", "google-chrome", "chrome"]:
+        p = shutil.which(name)
+        if p:
+            return p
+
+    common = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/snap/bin/chromium",
+    ]
+    for p in common:
+        if os.path.isfile(p):
+            return p
+
+    return None
+
+
+def get_datadome_cookie_playwright(timeout_sec=45):
+    """
+    Dung Playwright mo trang OAuth cua Garena, cho DataDome tags.js chay,
+    doi interstitial device check hoan tat, lay cookie da validate.
+    """
+    if not HAS_PLAYWRIGHT:
+        return ""
+
+    chrome_path = find_chromium_path()
+    if not chrome_path:
+        print("  [!] Khong tim thay Chromium. Cai dat: playwright install chromium")
+        return ""
+
+    print("  [*] Dang mo trinh duyet de lay DataDome cookie...")
+
+    try:
+        with sync_playwright() as p:
+            launch_args = [
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ]
+
+            browser = p.chromium.launch(
+                headless=True,
+                executable_path=chrome_path,
+                args=launch_args,
+            )
+
+            context = browser.new_context(
+                user_agent=BROWSER_UA,
+                viewport={"width": 412, "height": 915},
+                device_scale_factor=2.625,
+                is_mobile=True,
+                has_touch=True,
+                locale="vi-VN",
+                timezone_id="Asia/Ho_Chi_Minh",
+                extra_http_headers={
+                    "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "X-Requested-With": "com.garena.game.kgvn",
+                },
+                ignore_https_errors=True,
+            )
+
+            context.add_init_script("""
+                Object.defineProperty(navigator, 'webdriver', { get: () => false });
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['vi-VN', 'vi', 'en-US', 'en']
+                });
+                window.chrome = { runtime: {} };
+            """)
+
+            page = context.new_page()
+
+            interstitial_cookies = []
+            datadome_cookies = []
+
+            def on_response(response):
+                url = response.url
+                try:
+                    if response.status == 200 and response.request.method == "POST":
+                        if "captcha-delivery.com/interstitial" in url:
+                            body = response.text()
+                            data = json.loads(body)
+                            if data.get("view") == "redirect":
+                                cookie_str = data.get("cookie", "")
+                                if "datadome=" in cookie_str:
+                                    val = cookie_str.split("datadome=")[1].split(";")[0]
+                                    interstitial_cookies.append(val)
+                                    print(f"  [+] Interstitial validated!")
+                        elif "datadome" in url and "/js/" in url:
+                            body = response.text()
+                            if '"cookie"' in body and "datadome=" in body:
+                                data = json.loads(body)
+                                cookie_str = data.get("cookie", "")
+                                if "datadome=" in cookie_str:
+                                    val = cookie_str.split("datadome=")[1].split(";")[0]
+                                    datadome_cookies.append(val)
+                except Exception:
+                    pass
+
+            page.on("response", on_response)
+
+            print(f"  [*] Dang tai trang Garena OAuth...")
+            page.goto(OAUTH_URL, wait_until="domcontentloaded", timeout=timeout_sec * 1000)
+            print(f"  [*] Trang da tai, cho DataDome xu ly...")
+
+            deadline = time.time() + timeout_sec
+            while time.time() < deadline:
+                if interstitial_cookies:
+                    break
+                page.wait_for_timeout(500)
+
+            cookie_value = ""
+            if interstitial_cookies:
+                cookie_value = interstitial_cookies[-1]
+                print(f"  [+] DataDome cookie (interstitial): {cookie_value[:40]}...")
+            else:
+                cookies = context.cookies()
+                for c in cookies:
+                    if c["name"] == "datadome":
+                        cookie_value = c["value"]
+                        break
+                if not cookie_value and datadome_cookies:
+                    cookie_value = datadome_cookies[-1]
+                if cookie_value:
+                    print(f"  [+] DataDome cookie (browser): {cookie_value[:40]}...")
+                else:
+                    print("  [!] Khong lay duoc DataDome cookie")
+
+            browser.close()
+            return cookie_value
+
+    except Exception as e:
+        print(f"  [!] Playwright loi: {e}")
+        return ""
+
+
+def print_cookie_instructions():
+    """In huong dan lay datadome cookie thu cong."""
+    print("""
+╔══════════════════════════════════════════════════════════════╗
+║           HUONG DAN LAY DATADOME COOKIE THU CONG            ║
+╠══════════════════════════════════════════════════════════════╣
+║                                                              ║
+║  Buoc 1: Mo link sau trong trinh duyet dien thoai:           ║
+║                                                              ║
+║  https://100054.connect.garena.com/universal/oauth?           ║
+║    redirect_uri=gop100054%3A%2F%2Fauth%2F                    ║
+║    &response_type=code&client_id=100054                      ║
+║    &login_scenario=normal&locale=vi-VN                       ║
+║                                                              ║
+║  Buoc 2: Doi trang login hien ra (khoang 3-5 giay)          ║
+║                                                              ║
+║  Buoc 3: Lay cookie datadome:                                ║
+║    - Chrome: F12 -> Application -> Cookies -> garena.com     ║
+║    - Firefox: F12 -> Storage -> Cookies -> garena.com        ║
+║    - Tim cookie ten "datadome", copy gia tri                 ║
+║                                                              ║
+║  Buoc 4: Chay tool voi cookie:                               ║
+║    python3 auto_danzhu.py -a accounts.txt -c MA_MOI \\        ║
+║      --datadome "GIA_TRI_COOKIE"                             ║
+║                                                              ║
+║  Tren Termux/Android:                                        ║
+║    - Dung app "Cookie Editor" tren Chrome                    ║
+║    - Hoac dung Kiwi Browser (co DevTools)                    ║
+║                                                              ║
+╚══════════════════════════════════════════════════════════════╝
+""")
+
+
+def create_session(datadome_cookie=""):
     if HAS_CURL_CFFI:
         session = curl_requests.Session(impersonate="chrome120")
+    elif HAS_REQUESTS:
+        session = std_requests.Session()
     else:
-        session = fallback_requests.Session()
+        raise RuntimeError("Can curl_cffi hoac requests. Cai: pip install curl_cffi")
 
     if datadome_cookie:
         session.cookies.set("datadome", datadome_cookie, domain=".garena.com")
@@ -85,87 +287,12 @@ def create_session(datadome_cookie: str = ""):
     return session
 
 
-def handle_datadome_403(session, resp):
-    """
-    Xu ly DataDome 403: lay interstitial URL, gui device check, lay cookie moi.
-    Tra ve True neu bypass thanh cong.
-    """
-    try:
-        data = resp.json()
-    except Exception:
-        return False
+def http_get(session, url, headers, timeout=15):
+    return session.get(url, headers=headers, timeout=timeout)
 
-    interstitial_url = data.get("url", "")
-    if not interstitial_url:
-        return False
 
-    parsed = urllib.parse.urlparse(interstitial_url)
-    params = urllib.parse.parse_qs(parsed.query)
-
-    cid = params.get("cid", [""])[0]
-    hash_val = params.get("hash", [""])[0]
-    s_val = params.get("s", [""])[0]
-    e_val = params.get("e", [""])[0]
-    b_val = params.get("b", [""])[0]
-    referer = params.get("referer", [""])[0]
-    t_val = params.get("t", [""])[0]
-
-    if not cid or not hash_val:
-        return False
-
-    # Step 1: GET interstitial page (de lay cookies)
-    try:
-        interstitial_resp = session.get(interstitial_url, headers={
-            "User-Agent": BROWSER_UA,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-        })
-    except Exception:
-        return False
-
-    # Step 2: POST interstitial device check
-    try:
-        seed = str(uuid.uuid4())
-        post_data = {
-            "cid": cid,
-            "hash": hash_val,
-            "referer": referer or "HTTPS://100054.connect.garena.com/api/prelogin",
-            "url": referer or "HTTPS://100054.connect.garena.com/api/prelogin",
-            "s": s_val,
-            "e": e_val,
-            "b": b_val,
-            "dm": "jd",
-            "seed": seed,
-            "ps": "13338",
-        }
-
-        check_resp = session.post(
-            "https://geo.captcha-delivery.com/interstitial/",
-            data=post_data,
-            headers={
-                "User-Agent": BROWSER_UA,
-                "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                "Accept": "*/*",
-                "Origin": "https://geo.captcha-delivery.com",
-                "Referer": interstitial_url,
-                "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
-                "sec-ch-ua": '"Not;A=Brand";v="8", "Chromium";v="150", "Android WebView";v="150"',
-                "sec-ch-ua-mobile": "?1",
-                "sec-ch-ua-platform": '"Android"',
-                "X-Requested-With": "com.garena.game.kgvn",
-            },
-        )
-
-        result = check_resp.json()
-        cookie_str = result.get("cookie", "")
-        if cookie_str and "datadome=" in cookie_str:
-            cookie_val = cookie_str.split("datadome=")[1].split(";")[0]
-            session.cookies.set("datadome", cookie_val, domain=".garena.com")
-            return True
-    except Exception:
-        pass
-
-    return False
+def http_post(session, url, data=None, headers=None, timeout=15):
+    return session.post(url, data=data, headers=headers, timeout=timeout)
 
 
 def garena_login(session, account: str, password: str) -> dict:
@@ -180,66 +307,35 @@ def garena_login(session, account: str, password: str) -> dict:
         "Sec-Fetch-Site": "same-origin",
         "Sec-Fetch-Mode": "cors",
         "Sec-Fetch-Dest": "empty",
-        "Referer": (
-            f"{GARENA_CONNECT_BASE}/universal/oauth?"
-            f"redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
-            f"&response_type=code&client_id={GARENA_APP_ID}"
-            f"&login_scenario=normal&locale=vi-VN"
-        ),
+        "Referer": OAUTH_URL,
     }
 
-    # Step 0: Load OAuth page for initial cookies
-    oauth_url = (
-        f"{GARENA_CONNECT_BASE}/api/universal/oauth?"
-        f"redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
-        f"&response_type=code&client_id={GARENA_APP_ID}"
-        f"&login_scenario=normal&locale=vi-VN&format=json&id={ts_ms()}"
+    # Step 1: Prelogin - lay v2 salt
+    prelogin_url = (
+        f"{GARENA_CONNECT_BASE}/api/prelogin?"
+        f"app_id={GARENA_APP_ID}"
+        f"&account={urllib.parse.quote(account)}"
+        f"&format=json&id={ts_ms()}"
     )
-    session.get(oauth_url, headers=common_headers)
-    time.sleep(0.5)
+    resp = http_get(session, prelogin_url, common_headers)
 
-    # Step 1: Prelogin - lay v1, v2 (voi retry DataDome)
-    v2 = ""
-    for attempt in range(MAX_RETRIES):
-        prelogin_url = (
-            f"{GARENA_CONNECT_BASE}/api/prelogin?"
-            f"app_id={GARENA_APP_ID}"
-            f"&account={urllib.parse.quote(account)}"
-            f"&format=json&id={ts_ms()}"
-        )
-        resp = session.get(prelogin_url, headers=common_headers)
-
-        if resp.status_code == 403:
-            print(f"  [!] DataDome 403 (lan {attempt+1}/{MAX_RETRIES}), dang thu bypass...")
-            bypassed = handle_datadome_403(session, resp)
-            if bypassed:
-                print(f"  [+] DataDome bypass OK, thu lai...")
-                time.sleep(RETRY_DELAY)
-                continue
-            else:
-                if attempt < MAX_RETRIES - 1:
-                    print(f"  [!] Bypass khong thanh cong, doi {RETRY_DELAY}s roi thu lai...")
-                    time.sleep(RETRY_DELAY)
-                    continue
+    if resp.status_code == 403:
+        try:
+            err_data = resp.json()
+            if "url" in err_data and "captcha-delivery" in err_data.get("url", ""):
                 raise RuntimeError(
-                    f"[{account}] DataDome captcha sau {MAX_RETRIES} lan thu.\n"
-                    f"  -> Dung --datadome COOKIE de truyen cookie thu cong.\n"
-                    f"  -> Lay cookie: Mo trinh duyet -> garena.com -> F12 -> Application -> Cookies -> datadome"
+                    f"DataDome captcha! Cookie da het han hoac khong hop le.\n"
+                    f"  -> Lay cookie moi: python3 auto_danzhu.py --get-cookie"
                 )
+        except (ValueError, KeyError):
+            pass
+        raise RuntimeError(f"Prelogin 403 - DataDome chan. Dung --datadome COOKIE")
 
-        resp.raise_for_status()
-        prelogin_data = resp.json()
-        v2 = prelogin_data.get("v2", "")
-        if v2:
-            break
-        if "url" in prelogin_data:
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(RETRY_DELAY)
-                continue
-            raise RuntimeError(f"[{account}] Prelogin tra ve captcha URL")
-
+    resp.raise_for_status()
+    prelogin_data = resp.json()
+    v2 = prelogin_data.get("v2", "")
     if not v2:
-        raise RuntimeError(f"[{account}] Prelogin khong tra ve v2 sau {MAX_RETRIES} lan thu")
+        raise RuntimeError(f"Prelogin khong tra ve v2: {prelogin_data}")
 
     # Step 2: Login - gui password da hash
     pw_hash = garena_password_hash(password, v2)
@@ -251,22 +347,19 @@ def garena_login(session, account: str, password: str) -> dict:
         f"&redirect_uri={urllib.parse.quote(GARENA_REDIRECT_URI)}"
         f"&format=json&id={ts_ms()}"
     )
-    resp = session.get(login_url, headers=common_headers)
+    resp = http_get(session, login_url, common_headers)
     if resp.status_code == 403:
-        bypassed = handle_datadome_403(session, resp)
-        if bypassed:
-            time.sleep(1)
-            resp = session.get(login_url, headers=common_headers)
-        if resp.status_code == 403:
-            raise RuntimeError(f"[{account}] Login bi DataDome captcha.")
+        raise RuntimeError(f"Login 403 - DataDome chan.")
     resp.raise_for_status()
     login_data = resp.json()
     if "error" in login_data:
-        raise RuntimeError(f"[{account}] Login loi: {login_data}")
+        err_msg = login_data.get("error", "")
+        err_desc = login_data.get("description", login_data.get("msg", ""))
+        raise RuntimeError(f"Login loi: {err_msg} - {err_desc}")
     session_key = login_data.get("session_key", "")
     uid = login_data.get("uid", "")
     if not session_key:
-        raise RuntimeError(f"[{account}] Login khong co session_key: {login_data}")
+        raise RuntimeError(f"Login khong co session_key: {login_data}")
     print(f"  [+] Garena login OK: uid={uid}")
 
     # Step 3: Token Grant - lay authorization code
@@ -284,14 +377,14 @@ def garena_login(session, account: str, password: str) -> dict:
         f"&format=json"
         f"&id={ts_ms()}"
     )
-    resp = session.post(grant_url, data=grant_data, headers=grant_headers)
+    resp = http_post(session, grant_url, data=grant_data, headers=grant_headers)
     resp.raise_for_status()
     grant_result = resp.json()
     code = grant_result.get("code", "")
     if not code:
-        raise RuntimeError(f"[{account}] Token grant khong co code: {grant_result}")
+        raise RuntimeError(f"Token grant khong co code: {grant_result}")
 
-    # Step 4: Token Exchange - lay access_token (dung session rieng voi SDK UA)
+    # Step 4: Token Exchange - lay access_token (dung SDK UA)
     exchange_url = f"{GARENA_CONNECT_BASE}/oauth/token/exchange"
     exchange_data = (
         f"code={code}"
@@ -304,8 +397,8 @@ def garena_login(session, account: str, password: str) -> dict:
     )
     if HAS_CURL_CFFI:
         exchange_session = curl_requests.Session(impersonate="chrome120")
-    else:
-        exchange_session = fallback_requests.Session()
+    elif HAS_REQUESTS:
+        exchange_session = std_requests.Session()
     resp = exchange_session.post(exchange_url, data=exchange_data, headers={
         "User-Agent": SDK_UA,
         "Content-Type": "application/x-www-form-urlencoded",
@@ -316,7 +409,7 @@ def garena_login(session, account: str, password: str) -> dict:
     open_id = exchange_result.get("open_id", "")
     garena_uid = exchange_result.get("uid", "")
     if not access_token:
-        raise RuntimeError(f"[{account}] Token exchange khong co access_token: {exchange_result}")
+        raise RuntimeError(f"Token exchange khong co access_token: {exchange_result}")
     print(f"  [+] Token exchange OK: open_id={open_id[:16]}...")
 
     return {
@@ -361,19 +454,19 @@ def itop_login(access_token: str, open_id: str) -> dict:
 
     if HAS_CURL_CFFI:
         resp = curl_requests.post(url, data=body, headers=headers, timeout=15)
+    elif HAS_REQUESTS:
+        resp = std_requests.post(url, data=body, headers=headers, timeout=15)
     else:
-        resp = fallback_requests.post(url, data=body, headers=headers, timeout=15)
+        raise RuntimeError("Can curl_cffi hoac requests")
     resp.raise_for_status()
 
     try:
         result = resp.json()
     except Exception:
-        raise RuntimeError(
-            f"ITOP response khong phai JSON (co the can encrypt=1): {resp.text[:200]}"
-        )
+        raise RuntimeError(f"ITOP khong tra ve JSON: {resp.text[:200]}")
 
     if result.get("ret", -1) != 0:
-        raise RuntimeError(f"ITOP login loi: ret={result.get('ret')}, msg={result.get('msg','')}")
+        raise RuntimeError(f"ITOP loi: ret={result.get('ret')}, msg={result.get('msg','')}")
 
     token_info = result.get("token_info", {})
     aov_token = token_info.get("aov_token", result.get("aov_token", ""))
@@ -422,8 +515,10 @@ def use_invitation_code(aov_token, game_openid, game_token, invitation_code):
     body = json.dumps({"invitationCode": invitation_code})
     if HAS_CURL_CFFI:
         resp = curl_requests.post(url, data=body, headers=headers, timeout=15)
+    elif HAS_REQUESTS:
+        resp = std_requests.post(url, data=body, headers=headers, timeout=15)
     else:
-        resp = fallback_requests.post(url, data=body, headers=headers, timeout=15)
+        raise RuntimeError("Can curl_cffi hoac requests")
     resp.raise_for_status()
     return resp.json()
 
@@ -433,7 +528,14 @@ def process_account(account, password, invitation_code, datadome_cookie="", dela
     print(f"[*] Dang xu ly: {account}")
     print(f"{'='*60}")
 
-    session = create_session(datadome_cookie)
+    dd_cookie = datadome_cookie
+
+    if not dd_cookie and HAS_PLAYWRIGHT:
+        dd_cookie = get_datadome_cookie_playwright(timeout_sec=40)
+        if not dd_cookie:
+            print("  [!] Playwright khong lay duoc cookie, thu khong co cookie...")
+
+    session = create_session(dd_cookie)
 
     # Step 1: Garena Connect login
     try:
@@ -503,23 +605,65 @@ def load_accounts(filepath):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Auto nhap ma moi - Su kien Chung Suc Ban Bi (Lien Quan Mobile VN)"
+        description="Auto nhap ma moi - Su kien Chung Suc Ban Bi (Lien Quan Mobile VN)",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Vi du:
+  # Tu dong (can Playwright + Chrome):
+  python3 auto_danzhu.py -a accounts.txt -c 7Fr64s5RL6
+
+  # Thu cong (Termux/Android):
+  python3 auto_danzhu.py --get-cookie
+  python3 auto_danzhu.py -a accounts.txt -c 7Fr64s5RL6 --datadome "COOKIE"
+
+  # Dung chung 1 cookie cho nhieu tai khoan:
+  python3 auto_danzhu.py -a accounts.txt -c 7Fr64s5RL6 --datadome "COOKIE"
+        """
     )
-    parser.add_argument("--accounts", "-a", required=True,
+    parser.add_argument("--accounts", "-a",
         help="File danh sach tai khoan (account:password)")
-    parser.add_argument("--code", "-c", required=True,
+    parser.add_argument("--code", "-c",
         help="Ma moi ban be can nhap (vd: 7Fr64s5RL6)")
     parser.add_argument("--delay", "-d", type=float, default=3.0,
         help="Delay giua cac buoc (giay, mac dinh: 3)")
     parser.add_argument("--account-delay", type=float, default=5.0,
         help="Delay giua cac tai khoan (giay, mac dinh: 5)")
     parser.add_argument("--datadome", default="",
-        help="DataDome cookie (lay tu trinh duyet neu bi captcha)")
+        help="DataDome cookie (lay tu trinh duyet)")
+    parser.add_argument("--get-cookie", action="store_true",
+        help="Hien huong dan lay DataDome cookie thu cong")
     args = parser.parse_args()
 
-    if not HAS_CURL_CFFI:
-        print("[!] CANH BAO: Khong tim thay curl_cffi - de bi DataDome chan!")
-        print("[!] Cai dat: pip install curl_cffi")
+    if args.get_cookie:
+        if HAS_PLAYWRIGHT:
+            print("[*] Dang thu lay cookie bang Playwright...")
+            cookie = get_datadome_cookie_playwright(timeout_sec=45)
+            if cookie:
+                print(f"\n[+] THANH CONG! DataDome cookie:")
+                print(f"\n    {cookie}\n")
+                print(f"[*] Chay tool voi cookie nay:")
+                print(f'    python3 auto_danzhu.py -a accounts.txt -c MA_MOI --datadome "{cookie}"')
+            else:
+                print("\n[!] Playwright khong lay duoc cookie.")
+                print_cookie_instructions()
+        else:
+            print_cookie_instructions()
+        return
+
+    if not args.accounts or not args.code:
+        parser.print_help()
+        print("\n[!] Can --accounts va --code. Hoac dung --get-cookie de lay cookie truoc.")
+        sys.exit(1)
+
+    print(f"[*] HTTP: {'curl_cffi (Chrome TLS)' if HAS_CURL_CFFI else 'requests'}")
+    print(f"[*] Playwright: {'co' if HAS_PLAYWRIGHT else 'khong'}")
+
+    if not HAS_PLAYWRIGHT and not args.datadome:
+        print()
+        print("[!] CANH BAO: Khong co Playwright va khong co --datadome cookie!")
+        print("[!] Se bi DataDome chan. Cach xu ly:")
+        print("[!]   1. Cai Playwright: pip install playwright && playwright install chromium")
+        print("[!]   2. Hoac lay cookie: python3 auto_danzhu.py --get-cookie")
         print()
 
     accounts = load_accounts(args.accounts)
@@ -527,18 +671,17 @@ def main():
         print("[!] Khong tim thay tai khoan nao trong file.")
         sys.exit(1)
 
-    print(f"[*] HTTP client: {'curl_cffi (Chrome TLS)' if HAS_CURL_CFFI else 'requests (de bi chan)'}")
-    print(f"[*] Da doc {len(accounts)} tai khoan")
+    print(f"[*] So tai khoan: {len(accounts)}")
     print(f"[*] Ma moi: {args.code}")
     if args.datadome:
-        print(f"[*] DataDome cookie: {args.datadome[:30]}...")
+        print(f"[*] DataDome cookie: {args.datadome[:40]}...")
 
     success = 0
     fail = 0
 
     for i, (account, password) in enumerate(accounts):
         if i > 0:
-            print(f"\n[*] Cho {args.account_delay}s...")
+            print(f"\n[*] Cho {args.account_delay}s truoc tai khoan tiep...")
             time.sleep(args.account_delay)
 
         ok = process_account(account, password, args.code, args.datadome, args.delay)

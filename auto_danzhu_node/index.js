@@ -8,7 +8,12 @@
  *   3. AOV Cloud: danzhu/usecode - nhap ma moi ban be
  *
  * Usage:
- *   node index.js --accounts accounts.txt --code MA_MOI_CUA_BAN
+ *   node index.js --accounts accounts.txt --code MA_MOI --datadome "COOKIE"
+ *
+ * Lay DataDome cookie:
+ *   1. Mo link Garena OAuth trong trinh duyet
+ *   2. F12 -> Application -> Cookies -> garena.com -> datadome
+ *   3. Copy gia tri cookie
  *
  * accounts.txt format (moi dong 1 tai khoan):
  *   username:password
@@ -67,8 +72,8 @@ function sleep(ms) {
  * Minimal HTTP client that tracks cookies across requests (same-session).
  */
 class HttpClient {
-  constructor() {
-    this.cookies = {};
+  constructor(initialCookies = {}) {
+    this.cookies = { ...initialCookies };
   }
 
   _parseCookies(headers) {
@@ -135,8 +140,12 @@ class HttpClient {
 }
 
 // ── Garena Connect Login ────────────────────────────────────────────────
-async function garenaLogin(account, password) {
-  const client = new HttpClient();
+async function garenaLogin(account, password, dataDomeCookie = "") {
+  const initialCookies = {};
+  if (dataDomeCookie) {
+    initialCookies["datadome"] = dataDomeCookie;
+  }
+  const client = new HttpClient(initialCookies);
   const referer =
     `${GARENA_CONNECT_BASE}/universal/oauth?` +
     `redirect_uri=${encodeURIComponent(GARENA_REDIRECT_URI)}` +
@@ -173,12 +182,13 @@ async function garenaLogin(account, password) {
     } catch {
       data = {};
     }
-    if (data.url) {
+    if (data.url && data.url.includes("captcha-delivery")) {
       throw new Error(
-        `DataDome captcha! Doi 1-2 phut roi thu lai hoac dung proxy khac.`
+        `DataDome captcha! Cookie het han hoac khong hop le.\n` +
+        `  -> Lay cookie moi tu trinh duyet (xem huong dan trong file)`
       );
     }
-    throw new Error(`Prelogin 403: ${preRes.body.substring(0, 200)}`);
+    throw new Error(`Prelogin 403 - DataDome chan. Dung --datadome COOKIE`);
   }
   const preData = JSON.parse(preRes.body);
   const { v1, v2 } = preData;
@@ -365,7 +375,7 @@ async function useInvitationCode(aovToken, gameOpenId, gameToken, invCode) {
 }
 
 // ── Process one account ─────────────────────────────────────────────────
-async function processAccount(account, password, invCode, delay) {
+async function processAccount(account, password, invCode, delay, dataDomeCookie = "") {
   console.log(`\n${"=".repeat(60)}`);
   console.log(`[*] Dang xu ly: ${account}`);
   console.log(`${"=".repeat(60)}`);
@@ -373,7 +383,7 @@ async function processAccount(account, password, invCode, delay) {
   // Step 1: Garena login
   let garenaResult;
   try {
-    garenaResult = await garenaLogin(account, password);
+    garenaResult = await garenaLogin(account, password, dataDomeCookie);
   } catch (e) {
     console.log(`  [!] Garena login THAT BAI: ${e.message}`);
     return false;
@@ -455,6 +465,8 @@ async function main() {
   let invCode = "";
   let delay = 3000;
   let accountDelay = 5000;
+  let dataDomeCookie = "";
+  let getCookie = false;
 
   for (let i = 0; i < args.length; i++) {
     if ((args[i] === "--accounts" || args[i] === "-a") && args[i + 1]) {
@@ -465,22 +477,46 @@ async function main() {
       delay = parseFloat(args[++i]) * 1000;
     } else if (args[i] === "--account-delay" && args[i + 1]) {
       accountDelay = parseFloat(args[++i]) * 1000;
+    } else if (args[i] === "--datadome" && args[i + 1]) {
+      dataDomeCookie = args[++i];
+    } else if (args[i] === "--get-cookie") {
+      getCookie = true;
     }
+  }
+
+  if (getCookie) {
+    console.log(`\nHUONG DAN LAY DATADOME COOKIE:`);
+    console.log(`\n1. Mo link sau trong trinh duyet:`);
+    console.log(`   https://100054.connect.garena.com/universal/oauth?redirect_uri=gop100054%3A%2F%2Fauth%2F&response_type=code&client_id=100054&login_scenario=normal&locale=vi-VN`);
+    console.log(`\n2. Doi trang login hien ra (3-5 giay)`);
+    console.log(`\n3. Lay cookie datadome:`);
+    console.log(`   Chrome: F12 -> Application -> Cookies -> garena.com -> datadome`);
+    console.log(`   Tren Android: dung Kiwi Browser (co DevTools) hoac app Cookie Editor`);
+    console.log(`\n4. Chay tool voi cookie:`);
+    console.log(`   node index.js -a accounts.txt -c MA_MOI --datadome "GIA_TRI_COOKIE"\n`);
+    process.exit(0);
   }
 
   if (!accountsFile || !invCode) {
     console.log(
-      "Usage: node index.js --accounts accounts.txt --code MA_MOI_CUA_BAN"
+      "Usage: node index.js --accounts accounts.txt --code MA_MOI --datadome COOKIE"
     );
     console.log("");
     console.log("Options:");
     console.log("  --accounts, -a   File danh sach tai khoan (account:password)");
     console.log("  --code, -c       Ma moi ban be can nhap");
+    console.log("  --datadome       DataDome cookie (lay tu trinh duyet)");
     console.log("  --delay, -d      Delay giua cac buoc (giay, mac dinh: 3)");
     console.log(
       "  --account-delay  Delay giua cac tai khoan (giay, mac dinh: 5)"
     );
+    console.log("  --get-cookie     Huong dan lay DataDome cookie");
     process.exit(1);
+  }
+
+  if (!dataDomeCookie) {
+    console.log("[!] CANH BAO: Khong co --datadome cookie, se bi DataDome chan!");
+    console.log("[!] Lay cookie: node index.js --get-cookie\n");
   }
 
   const accounts = loadAccounts(accountsFile);
@@ -491,6 +527,9 @@ async function main() {
 
   console.log(`[*] Da doc ${accounts.length} tai khoan`);
   console.log(`[*] Ma moi: ${invCode}`);
+  if (dataDomeCookie) {
+    console.log(`[*] DataDome cookie: ${dataDomeCookie.substring(0, 40)}...`);
+  }
   console.log(`[*] Delay giua cac buoc: ${delay / 1000}s`);
   console.log(`[*] Delay giua cac tai khoan: ${accountDelay / 1000}s`);
 
@@ -506,7 +545,7 @@ async function main() {
     }
 
     const { account, password } = accounts[i];
-    const ok = await processAccount(account, password, invCode, delay);
+    const ok = await processAccount(account, password, invCode, delay, dataDomeCookie);
     if (ok) successCount++;
     else failCount++;
   }
