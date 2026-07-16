@@ -529,10 +529,15 @@ public class MainActivity extends Activity {
         int seqRand = (int)(Math.random() * 9000) + 1000;
         String seq = GAMEID + "-" + uuid + "-" + seqTs + "-" + seqRand;
 
+        JSONObject ci = new JSONObject();
+        ci.put("access_token", accessToken);
+        ci.put("open_id", openId);
+
         JSONObject ib = new JSONObject();
         ib.put("openid", openId);
         ib.put("token", accessToken);
         ib.put("channel_dis", "");
+        ib.put("channel_info", ci.toString());
         ib.put("channelid", Integer.parseInt(CHANNELID));
         ib.put("gameid", Integer.parseInt(GAMEID));
         ib.put("os", 1);
