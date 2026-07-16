@@ -538,22 +538,21 @@ public class MainActivity extends Activity {
         int seqRand = (int)(Math.random() * 9000) + 1000;
         String seq = GAMEID + "-" + uuid + "-" + seqTs + "-" + seqRand;
 
-        String channelInfoStr = "";
+        JSONObject ci;
         if (exchangeBody != null && exchangeBody.length() > 0) {
-            channelInfoStr = exchangeBody;
+            ci = new JSONObject(exchangeBody);
         } else {
-            JSONObject ci = new JSONObject();
+            ci = new JSONObject();
             ci.put("access_token", accessToken);
             ci.put("uid", garenaUid != null ? garenaUid : "");
-            channelInfoStr = ci.toString();
         }
-        log("[ITOP] channel_info=" + safe(channelInfoStr, 200));
+        log("[ITOP] channel_info(obj)=" + safe(ci.toString(), 200));
 
         JSONObject ib = new JSONObject();
         ib.put("openid", openId);
         ib.put("token", accessToken);
         ib.put("channel_dis", "");
-        ib.put("channel_info", channelInfoStr);
+        ib.put("channel_info", ci);
         ib.put("channelid", Integer.parseInt(CHANNELID));
         ib.put("gameid", Integer.parseInt(GAMEID));
         ib.put("os", 1);
