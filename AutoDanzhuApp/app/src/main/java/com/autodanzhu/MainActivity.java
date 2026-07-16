@@ -532,6 +532,7 @@ public class MainActivity extends Activity {
         JSONObject ib = new JSONObject();
         ib.put("openid", openId);
         ib.put("token", accessToken);
+        ib.put("channel_dis", "");
         ib.put("channelid", Integer.parseInt(CHANNELID));
         ib.put("gameid", Integer.parseInt(GAMEID));
         ib.put("os", 1);
