@@ -540,6 +540,8 @@ public class MainActivity extends Activity {
 
         JSONObject ci = new JSONObject();
         ci.put("token", accessToken);
+        ci.put("channelid", Integer.parseInt(CHANNELID));
+        ci.put("gameid", Integer.parseInt(GAMEID));
         if (exchangeBody != null && exchangeBody.length() > 0) {
             JSONObject ex = new JSONObject(exchangeBody);
             ci.put("uid", ex.opt("uid"));
