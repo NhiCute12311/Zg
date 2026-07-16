@@ -540,15 +540,15 @@ public class MainActivity extends Activity {
 
         JSONObject ci = new JSONObject();
         ci.put("token", accessToken);
-        ci.put("channelid", Integer.parseInt(CHANNELID));
-        ci.put("gameid", Integer.parseInt(GAMEID));
+        ci.put("channelid", CHANNELID);
+        ci.put("gameid", GAMEID);
         if (exchangeBody != null && exchangeBody.length() > 0) {
             JSONObject ex = new JSONObject(exchangeBody);
-            ci.put("uid", ex.opt("uid"));
+            ci.put("uid", String.valueOf(ex.optLong("uid", 0)));
             ci.put("open_id", ex.optString("open_id", openId));
-            ci.put("expiry_time", ex.opt("expiry_time"));
-            ci.put("platform", ex.opt("platform"));
-            ci.put("create_time", ex.opt("create_time"));
+            ci.put("expiry_time", String.valueOf(ex.optLong("expiry_time", 0)));
+            ci.put("platform", String.valueOf(ex.optInt("platform", 0)));
+            ci.put("create_time", String.valueOf(ex.optLong("create_time", 0)));
         } else {
             ci.put("uid", garenaUid != null ? garenaUid : "");
         }
@@ -559,9 +559,9 @@ public class MainActivity extends Activity {
         ib.put("token", accessToken);
         ib.put("channel_dis", "");
         ib.put("channel_info", ci);
-        ib.put("channelid", Integer.parseInt(CHANNELID));
-        ib.put("gameid", Integer.parseInt(GAMEID));
-        ib.put("os", 1);
+        ib.put("channelid", CHANNELID);
+        ib.put("gameid", GAMEID);
+        ib.put("os", "1");
         ib.put("lang", "");
         ib.put("seq", seq);
         ib.put("ts", ts);
