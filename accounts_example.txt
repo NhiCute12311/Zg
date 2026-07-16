@@ -1,0 +1,7 @@
+# File danh sach tai khoan Garena
+# Format: account:password (moi dong 1 tai khoan)
+# account co the la email hoac username Garena
+#
+# Vi du:
+# example@gmail.com:matkhau123
+# username123:matkhau456
