@@ -57,7 +57,7 @@ public class ScriptManager {
     public static List<String[]> getSavedScripts(Context context) {
         SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
         Map<String, ?> all = prefs.getAll();
-        List<String[]> scripts = new ArrayList<>();
+        List<String[]> scripts = new ArrayList<String[]>();
         for (Map.Entry<String, ?> entry : all.entrySet()) {
             scripts.add(new String[]{entry.getKey(), String.valueOf(entry.getValue())});
         }

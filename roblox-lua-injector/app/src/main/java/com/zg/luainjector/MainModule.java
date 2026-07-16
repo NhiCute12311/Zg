@@ -45,13 +45,18 @@ public class MainModule implements IXposedHookLoadPackage {
                         XposedBridge.log(TAG + ": Activity resumed, starting floating menu");
 
                         Intent serviceIntent = new Intent(activity, FloatingMenuService.class);
-                        activity.startForegroundService(serviceIntent);
+                        try {
+                            activity.getClass().getMethod("startForegroundService", Intent.class)
+                                    .invoke(activity, serviceIntent);
+                        } catch (Exception e) {
+                            activity.startService(serviceIntent);
+                        }
                     }
                 }
         );
     }
 
-    private void hookLuaEngine(XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookLuaEngine(final XC_LoadPackage.LoadPackageParam lpparam) {
         try {
             XposedHelpers.findAndHookMethod(
                     "com.roblox.engine.jni.NativeGL",
@@ -73,7 +78,7 @@ public class MainModule implements IXposedHookLoadPackage {
         }
     }
 
-    private void hookAlternativeEntry(XC_LoadPackage.LoadPackageParam lpparam) {
+    private void hookAlternativeEntry(final XC_LoadPackage.LoadPackageParam lpparam) {
         try {
             XposedHelpers.findAndHookMethod(
                     "com.roblox.client.ActivityGlView",
