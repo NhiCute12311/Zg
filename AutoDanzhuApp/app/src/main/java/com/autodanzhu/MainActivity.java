@@ -83,6 +83,7 @@ public class MainActivity extends Activity {
     private volatile String capturedCode = null;
     private volatile String capturedAccessToken = null;
     private volatile String capturedOpenId = null;
+    private volatile String capturedGarenaUid = null;
     private volatile boolean tokenProcessing = false;
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -305,7 +306,8 @@ public class MainActivity extends Activity {
                 if (j.has("error")) {
                     log("[Login] Error: " + j.optString("error"));
                 } else {
-                    log("[Login] OK: " + j.optString("username", "") + " uid=" + j.optInt("uid", 0));
+                    capturedGarenaUid = String.valueOf(j.optLong("uid", 0));
+                    log("[Login] OK: " + j.optString("username", "") + " uid=" + capturedGarenaUid);
                 }
             } catch (Exception e) {
                 log("[Login] Err: " + e.getMessage());
@@ -421,6 +423,7 @@ public class MainActivity extends Activity {
         capturedCode = null;
         capturedAccessToken = null;
         capturedOpenId = null;
+        capturedGarenaUid = null;
         tokenProcessing = false;
 
         CookieSyncManager.createInstance(this);
@@ -460,7 +463,7 @@ public class MainActivity extends Activity {
             @Override
             public void run() {
                 try {
-                    doItopAndUsecode(capturedAccessToken, capturedOpenId);
+                    doItopAndUsecode(capturedAccessToken, capturedOpenId, capturedGarenaUid);
                 } catch (Exception e) {
                     log("[!] Error: " + e.getMessage());
                 }
@@ -522,7 +525,7 @@ public class MainActivity extends Activity {
         return sig;
     }
 
-    private void doItopAndUsecode(String accessToken, String openId) throws Exception {
+    private void doItopAndUsecode(String accessToken, String openId, String garenaUid) throws Exception {
         String ts = String.valueOf(System.currentTimeMillis() / 1000);
         String uuid = java.util.UUID.randomUUID().toString();
         String seqTs = String.valueOf(System.currentTimeMillis() / 1000 - 30);
@@ -530,8 +533,11 @@ public class MainActivity extends Activity {
         String seq = GAMEID + "-" + uuid + "-" + seqTs + "-" + seqRand;
 
         JSONObject ci = new JSONObject();
-        ci.put("access_token", accessToken);
-        ci.put("open_id", openId);
+        ci.put("token", accessToken);
+        ci.put("openid", openId);
+        if (garenaUid != null && garenaUid.length() > 0) {
+            ci.put("uid", garenaUid);
+        }
 
         JSONObject ib = new JSONObject();
         ib.put("openid", openId);
