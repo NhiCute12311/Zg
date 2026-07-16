@@ -55,6 +55,14 @@
             android:layout_marginLeft="6dp"
             android:text="WEB"
             android:textSize="13sp" />
+
+        <Button
+            android:id="@+id/btnCopyLog"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginLeft="6dp"
+            android:text="COPY"
+            android:textSize="13sp" />
     </LinearLayout>
 
     <TextView

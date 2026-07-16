@@ -22,6 +22,9 @@ import android.widget.EditText;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.content.ClipboardManager;
+import android.content.ClipData;
+import android.content.Context;
 
 import org.json.JSONObject;
 
@@ -62,6 +65,7 @@ public class MainActivity extends Activity {
     private Button btnStart;
     private Button btnStop;
     private Button btnToggleWeb;
+    private Button btnCopyLog;
     private TextView tvStatus;
     private TextView tvLog;
     private ScrollView scrollLog;
@@ -91,6 +95,7 @@ public class MainActivity extends Activity {
         btnStart = (Button) findViewById(R.id.btnStart);
         btnStop = (Button) findViewById(R.id.btnStop);
         btnToggleWeb = (Button) findViewById(R.id.btnToggleWeb);
+        btnCopyLog = (Button) findViewById(R.id.btnCopyLog);
         tvStatus = (TextView) findViewById(R.id.tvStatus);
         tvLog = (TextView) findViewById(R.id.tvLog);
         scrollLog = (ScrollView) findViewById(R.id.scrollLog);
@@ -116,6 +121,13 @@ public class MainActivity extends Activity {
             @Override
             public void onClick(View v) {
                 toggleWebView();
+            }
+        });
+
+        btnCopyLog.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                copyLog();
             }
         });
     }
@@ -721,6 +733,17 @@ public class MainActivity extends Activity {
 
     private void toast(String msg) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+    }
+
+    private void copyLog() {
+        String logText = tvLog.getText().toString();
+        if (logText.length() == 0) {
+            toast("Log trong");
+            return;
+        }
+        ClipboardManager clip = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        clip.setPrimaryClip(ClipData.newPlainText("AutoDanzhu Log", logText));
+        toast("Da copy log!");
     }
 
     private void toggleWebView() {
